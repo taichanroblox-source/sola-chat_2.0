@@ -39,6 +39,17 @@ GROUP_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 OFFICIAL_ADMINS = {x.strip().lower() for x in os.getenv('SOLA_OFFICIAL_ADMINS', '').split(',') if x.strip()}
 
 
+
+def sola_admin_authenticated():
+    user = current_user()
+    return bool(
+        user
+        and user['username'].lower() in OFFICIAL_ADMINS
+        and session.get('sola_admin') is True
+        and os.getenv('SOLA_ADMIN_PASSWORD_HASH', '').strip()
+    )
+
+
 def db():
     if 'db' not in g:
         if IS_PG:
@@ -301,7 +312,7 @@ def sola_admin_page():
     user=current_user()
     if not user:
         return redirect('/login?next=/admin')
-    if user['username'].lower() not in OFFICIAL_ADMINS:
+    if not sola_admin_authenticated():
         return '管理者だけが開けるページだよ', 403
     return sola_page()
 
@@ -346,7 +357,7 @@ def sola_user_page(code):
 def me():
     session.setdefault('csrf', secrets.token_urlsafe(32))
     if current_user():run('UPDATE sola2_users SET last_seen=CURRENT_TIMESTAMP WHERE id=%s',(session['uid'],))
-    return jsonify(user=current_user(), csrf=session['csrf'], official_admin=bool(current_user() and current_user()['username'].lower() in OFFICIAL_ADMINS))
+    return jsonify(user=current_user(), csrf=session['csrf'], official_admin=bool(current_user() and sola_admin_authenticated()))
 
 
 @app.post('/api/register')
@@ -371,7 +382,7 @@ def register():
     session.permanent = True
     session['uid'] = user['id']
     session['csrf'] = secrets.token_urlsafe(32)
-    return jsonify(user=current_user(),csrf=session['csrf'],official_admin=name.lower() in OFFICIAL_ADMINS), 201
+    return jsonify(user=current_user(),csrf=session['csrf'],official_admin=False), 201
 
 
 # SOLA ELEVEN FEATURES 2026: rate limiting and account security.
@@ -413,12 +424,51 @@ def login():
         run('DELETE FROM sola2_login_attempts WHERE attempt_key=%s',(key,))
         run('INSERT INTO sola2_login_attempts (attempt_key,failures,first_at,blocked_until) VALUES (%s,%s,%s,%s)',(key,failures,first_at,until))
         return error('ログイン試行が多すぎるよ。15分ほど待ってから試してね' if until else 'ユーザー名かパスワードが違うよ',429 if until else 401)
+    wants_admin = data.get('admin_login') is True
+
+    if wants_admin:
+        stored_hash = os.getenv('SOLA_ADMIN_PASSWORD_HASH', '').strip()
+        supplied = str(data.get('admin_password', ''))
+
+        valid_admin = (
+            user['username'].lower() in OFFICIAL_ADMINS
+            and bool(stored_hash)
+            and bool(supplied)
+            and check_password_hash(stored_hash, supplied)
+        )
+
+        if not valid_admin:
+            failures = (
+                int(attempt['failures']) + 1
+                if attempt and now-int(attempt['first_at']) < 900
+                else 1
+            )
+            first_at = (
+                int(attempt['first_at'])
+                if attempt and now-int(attempt['first_at']) < 900
+                else now
+            )
+            until = now+900 if failures >= 5 else 0
+
+            run('DELETE FROM sola2_login_attempts WHERE attempt_key=%s',(key,))
+            run(
+                'INSERT INTO sola2_login_attempts '
+                '(attempt_key,failures,first_at,blocked_until) '
+                'VALUES (%s,%s,%s,%s)',
+                (key,failures,first_at,until)
+            )
+            return error(
+                'ログイン試行が多すぎるよ。15分ほど待ってから試してね'
+                if until else 'ログイン情報が正しくないよ',
+                429 if until else 401
+            )
+
     run('DELETE FROM sola2_login_attempts WHERE attempt_key=%s',(key,))
     run('INSERT INTO sola2_login_history (user_id,device) VALUES (%s,%s)',(user['id'],request.user_agent.string[:160] or '不明な端末'))
     if user.get('suspended'):
         return error('アカウントが停止されています。理由：'+(user.get('suspension_reason') or '理由の記載なし'),403)
-    session.clear();session.permanent=True;session['uid']=user['id'];session['csrf']=secrets.token_urlsafe(32)
-    return jsonify(user=current_user(),csrf=session['csrf'],official_admin=user['username'].lower() in OFFICIAL_ADMINS)
+    session.clear();session.permanent=True;session['uid']=user['id'];session['csrf']=secrets.token_urlsafe(32);session['sola_admin']=wants_admin
+    return jsonify(user=current_user(),csrf=session['csrf'],official_admin=sola_admin_authenticated())
 
 
 @app.post('/api/logout')
@@ -590,30 +640,108 @@ def accept_request(req_id):
 @app.get('/api/chats')
 @login_required
 def chats():
-    uid=session['uid']
-    data=rows('''SELECT c.id,c.kind,c.name,c.creator_id,c.official,c.group_code,m.joined_at,
-          CASE WHEN p.chat_id IS NULL THEN 0 ELSE 1 END AS pinned
-          FROM sola2_chats c JOIN sola2_members m ON m.chat_id=c.id
-          LEFT JOIN sola2_chat_pins p ON p.chat_id=c.id AND p.user_id=m.user_id
-          WHERE m.user_id=%s
-          ORDER BY c.official DESC, pinned DESC,m.joined_at ASC,c.id ASC''',(uid,))
+    uid = session['uid']
+
+    data = rows("""
+        SELECT
+            c.id, c.kind, c.name, c.creator_id,
+            c.official, c.group_code, m.joined_at,
+            CASE WHEN p.chat_id IS NULL THEN 0 ELSE 1 END AS pinned,
+
+            (SELECT COUNT(*)
+             FROM sola2_members mm
+             WHERE mm.chat_id=c.id) AS member_count,
+
+            (SELECT u.username
+             FROM sola2_users u
+             WHERE u.id=c.creator_id) AS creator_username,
+
+            (SELECT u.id
+             FROM sola2_members dm
+             JOIN sola2_users u ON u.id=dm.user_id
+             WHERE dm.chat_id=c.id AND u.id<>%s
+             LIMIT 1) AS other_user_id,
+
+            (SELECT u.username
+             FROM sola2_members dm
+             JOIN sola2_users u ON u.id=dm.user_id
+             WHERE dm.chat_id=c.id AND u.id<>%s
+             LIMIT 1) AS other_username,
+
+            (SELECT msg.id
+             FROM sola2_messages msg
+             WHERE msg.chat_id=c.id
+             ORDER BY msg.id DESC LIMIT 1) AS last_message_id,
+
+            (SELECT msg.body
+             FROM sola2_messages msg
+             WHERE msg.chat_id=c.id
+             ORDER BY msg.id DESC LIMIT 1) AS last_message_body,
+
+            (SELECT msg.deleted_at
+             FROM sola2_messages msg
+             WHERE msg.chat_id=c.id
+             ORDER BY msg.id DESC LIMIT 1) AS last_deleted_at,
+
+            (SELECT COUNT(*)
+             FROM sola2_messages msg
+             WHERE msg.chat_id=c.id
+               AND msg.user_id<>%s
+               AND msg.id>COALESCE(
+                   (SELECT r.last_read_id
+                    FROM sola2_chat_reads r
+                    WHERE r.chat_id=c.id AND r.user_id=%s),0
+               )) AS unread,
+
+            (SELECT n.nickname
+             FROM sola2_nicknames n
+             WHERE n.owner_id=%s
+               AND n.target_id=(
+                   SELECT dm.user_id
+                   FROM sola2_members dm
+                   WHERE dm.chat_id=c.id AND dm.user_id<>%s
+                   LIMIT 1
+               )) AS other_nickname,
+
+            (SELECT COUNT(*)
+             FROM sola2_files f
+             WHERE f.message_id=(
+                 SELECT msg.id
+                 FROM sola2_messages msg
+                 WHERE msg.chat_id=c.id
+                 ORDER BY msg.id DESC LIMIT 1
+             )) AS last_has_file
+
+        FROM sola2_chats c
+        JOIN sola2_members m ON m.chat_id=c.id
+        LEFT JOIN sola2_chat_pins p
+          ON p.chat_id=c.id AND p.user_id=m.user_id
+        WHERE m.user_id=%s
+        ORDER BY c.official DESC, pinned DESC,
+                 m.joined_at ASC, c.id ASC
+    """, (uid,uid,uid,uid,uid,uid,uid))
+
     for chat in data:
-        if chat['kind']=='group':
-            chat['member_count']=one('SELECT COUNT(*) AS n FROM sola2_members WHERE chat_id=%s',(chat['id'],))['n']
-        if chat['kind']=='dm':
-            other=one('SELECT u.id,u.username FROM sola2_members m JOIN sola2_users u ON u.id=m.user_id WHERE m.chat_id=%s AND u.id<>%s',(chat['id'],uid))
-            chat['name']=(other['username']+'とのチャット') if other else '2人チャット'
-            chat['other_user_id']=other['id'] if other else None
-            if other:
-                alias=one('SELECT nickname FROM sola2_nicknames WHERE owner_id=%s AND target_id=%s',(uid,other['id']))
-                if alias:chat['name']=alias['nickname']+'とのチャット'
-        chat['creator']=one('SELECT id,username FROM sola2_users WHERE id=%s',(chat['creator_id'],)) if chat['creator_id'] else None
-        last=one('SELECT id,body,deleted_at FROM sola2_messages WHERE chat_id=%s ORDER BY id DESC LIMIT 1',(chat['id'],))
-        chat['last_message']=('送信が取り消されました' if last.get('deleted_at') else (last['body'] or ('📎 ファイル' if one('SELECT message_id FROM sola2_files WHERE message_id=%s',(last['id'],)) else '📷 写真'))) if last else ''
-        unread=one('''SELECT COUNT(*) AS count FROM sola2_messages msg
-            WHERE msg.chat_id=%s AND msg.user_id<>%s
-            AND msg.id>COALESCE((SELECT last_read_id FROM sola2_chat_reads WHERE chat_id=%s AND user_id=%s),0)''',(chat['id'],uid,chat['id'],uid))
-        chat['unread']=unread['count'] if unread else 0
+        if chat['kind'] == 'dm':
+            name = chat['other_nickname'] or chat['other_username']
+            chat['name'] = (name + 'とのチャット') if name else '2人チャット'
+
+        chat['creator'] = (
+            {'id': chat['creator_id'], 'username': chat['creator_username']}
+            if chat['creator_id'] else None
+        )
+
+        if chat['last_message_id'] is None:
+            chat['last_message'] = ''
+        elif chat['last_deleted_at']:
+            chat['last_message'] = '送信が取り消されました'
+        elif chat['last_message_body']:
+            chat['last_message'] = chat['last_message_body']
+        elif chat['last_has_file']:
+            chat['last_message'] = '📎 ファイル'
+        else:
+            chat['last_message'] = '📷 写真'
+
     return jsonify(chats=data)
 
 
@@ -671,7 +799,7 @@ def create_group():
     name=str(payload().get('name','')).strip()
     if not 2<=len(name)<=60:
         return error('グループ名は2〜60文字にしてね')
-    official=1 if payload().get('official') and current_user()['username'].lower() in OFFICIAL_ADMINS else 0
+    official=1 if payload().get('official') and sola_admin_authenticated() else 0
     if payload().get('official') and not official:
         return error('公式グループは運営者だけが作れるよ',403)
     group_code=new_group_code()
@@ -1118,22 +1246,55 @@ def report():
     return jsonify(ok=True)
 
 
+
 @app.get('/api/admin/overview')
 @login_required
 def admin_overview():
-    if current_user()['username'].lower() not in OFFICIAL_ADMINS:return error('運営者専用だよ',403)
-    counts={}
-    for label,query in [('users','SELECT COUNT(*) AS n FROM sola2_users'),('groups',"SELECT COUNT(*) AS n FROM sola2_chats WHERE kind='group'"),('messages','SELECT COUNT(*) AS n FROM sola2_messages'),('reports','SELECT COUNT(*) AS n FROM sola2_reports')]:
-        counts[label]=one(query)['n']
-    users=rows('SELECT id,username,public_code,created_at FROM sola2_users ORDER BY id DESC LIMIT 40')
-    groups=rows("SELECT c.id,c.name,c.group_code,c.created_at,u.username AS owner FROM sola2_chats c LEFT JOIN sola2_users u ON u.id=c.creator_id WHERE c.kind='group' ORDER BY c.id DESC LIMIT 40")
-    return jsonify(counts=counts,users=users,groups=groups)
+    if not sola_admin_authenticated():
+        return error('運営者専用だよ', 403)
+
+    users = rows("""
+        SELECT id, username, public_code, created_at,
+               last_seen, hide_online, online_mode
+        FROM sola2_users ORDER BY username
+    """)
+
+    for u in users:
+        u['online'] = online_value(u)
+
+    groups = rows("""
+        SELECT c.id, c.name, c.group_code,
+               c.created_at, u.username AS owner,
+               (SELECT COUNT(*) FROM sola2_members m
+                WHERE m.chat_id=c.id) AS members,
+               (SELECT COUNT(*) FROM sola2_messages msg
+                WHERE msg.chat_id=c.id) AS messages
+        FROM sola2_chats c
+        LEFT JOIN sola2_users u ON u.id=c.creator_id
+        WHERE c.kind='group'
+        ORDER BY c.id DESC
+    """)
+
+    counts = {
+        'users': len(users),
+        'online': sum(1 for u in users if u['online']),
+        'offline': sum(1 for u in users if not u['online']),
+        'groups': len(groups),
+        'messages': one(
+            'SELECT COUNT(*) AS n FROM sola2_messages'
+        )['n'],
+        'reports': one(
+            'SELECT COUNT(*) AS n FROM sola2_reports'
+        )['n']
+    }
+
+    return jsonify(counts=counts, users=users, groups=groups)
 
 
 @app.get('/api/admin/reports')
 @login_required
 def admin_reports():
-    if current_user()['username'].lower() not in OFFICIAL_ADMINS:return error('運営者専用だよ',403)
+    if not sola_admin_authenticated():return error('運営者専用だよ',403)
     return jsonify(reports=rows('''SELECT r.id,r.reason,r.created_at,r.message_id,r.status, reporter.username AS reporter,
         target.username AS target FROM sola2_reports r JOIN sola2_users reporter ON reporter.id=r.reporter_id
         LEFT JOIN sola2_users target ON target.id=r.reported_id ORDER BY r.id DESC LIMIT 100'''))
@@ -1391,7 +1552,7 @@ def sola26_timing(response):
 @app.get('/api/sola26/health')
 @login_required
 def sola26_health():
-    if current_user()['username'].lower() not in OFFICIAL_ADMINS:
+    if not sola_admin_authenticated():
         return error('運営者専用だよ', 403)
     started = _sola_perf_counter()
     run('SELECT 1').fetchone()
@@ -1400,7 +1561,7 @@ def sola26_health():
 @app.post('/api/sola26/maintenance')
 @login_required
 def sola26_maintenance():
-    if current_user()['username'].lower() not in OFFICIAL_ADMINS:
+    if not sola_admin_authenticated():
         return error('運営者専用だよ',403)
     value=str(payload().get('message','')).strip()
     if len(value)>300:return error('300文字以内で入力してね')
@@ -1416,7 +1577,7 @@ def sola26_get_maintenance():
 @app.patch('/api/admin/reports/<int:report_id>/status')
 @login_required
 def sola26_report_status(report_id):
-    if current_user()['username'].lower() not in OFFICIAL_ADMINS:
+    if not sola_admin_authenticated():
         return error('運営者専用だよ',403)
     status=payload().get('status')
     if status not in ('open','reviewing','resolved'):return error('ステータスが正しくないよ')

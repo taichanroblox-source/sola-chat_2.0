@@ -119,10 +119,94 @@ function render(){
   });
   add(sidebar,el('div','sidebottom subtle','ログイン中：'+state.me.username));add(shell,sidebar,main,bottom);root.append(shell);
   const home=button('',()=>navigate('chats'),'mobilehome');add(home,brandIcon('mini'),el('span','','SOLA CHAT'));main.append(home);
-  ({chats:renderChats,join:renderJoinGroup,search:renderSearch,friends:renderFriends,notifications:renderNotifications,profile:renderProfile,admin:renderAdminDashboard}[state.view]||renderChats)(main);sola26BackTop(main)
+  ({chats:renderChats,join:renderJoinGroup,search:renderSearch,friends:renderFriends,notifications:renderNotifications,profile:renderProfile,admin:renderAdminDashboard}[state.view]||renderChats)(main)
 }
 async function updateNotificationBadge(){if(!state.me)return;try{const r=await api('/api/notifications/summary');state.unreadNotifications=r.unread;document.querySelectorAll('[data-notification-count]').forEach(b=>{b.textContent=r.unread>99?'99+':String(r.unread);b.hidden=!r.unread})}catch{}}
-function renderAuth(){const outer=el('div','auth'),box=el('div','authcard'),form=el('form','stack'),name=field('ユーザー名'),pass=field('パスワード','password'),err=el('div','error');let register=false;const heading=el('h1','','SOLA CHAT 2.0'),submit=button('ログイン',()=>{}),switcher=button('新規登録はこちら',()=>{},'btn secondary');submit.type='submit';submit.onclick=null;switcher.onclick=()=>{register=!register;submit.textContent=register?'アカウントを作成':'ログイン';switcher.textContent=register?'ログインに戻る':'新規登録はこちら';setError(err,'')};form.onsubmit=async e=>{e.preventDefault();setError(err,'');submit.disabled=true;try{const result=await api(register?'/api/register':'/api/login','POST',{username:name.value,password:pass.value});state.me=result.user;state.officialAdmin=Boolean(result.official_admin);noticeBaseline=null;render();updateNotificationBadge();pollInAppNotices();solaStartRoute()}catch(ex){setError(err,ex.message)}finally{submit.disabled=false}};add(form,name,pass,err,submit,switcher);add(box,brandIcon('auth-logo'),heading,el('p','subtle','夕焼け色のチャットアプリ'),form);outer.append(box);root.append(outer)}
+
+function renderAuth(){
+ const outer=el('div','auth');
+ const box=el('div','authcard');
+ const form=el('form','stack');
+
+ const name=field('ユーザー名');
+ const pass=field('アカウントのパスワード','password');
+ const err=el('div','error');
+
+ let register=false;
+
+ const heading=el('h1','','SOLA CHAT 2.0');
+ const submit=button('ログイン',()=>{});
+ const switcher=button('新規登録はこちら',()=>{},'btn secondary');
+
+ const adminLabel=el('label','sola-admin-login-check');
+ const adminCheck=document.createElement('input');
+ adminCheck.type='checkbox';
+ adminLabel.append(adminCheck,document.createTextNode(' 管理者としてログインする'));
+
+ const adminBox=el('div','sola-admin-login-box');
+ const adminTitle=el('strong','','🛡️ 管理者認証');
+ const adminPass=field('管理者パスワード','password');
+ adminBox.append(adminTitle,adminPass);
+ adminBox.hidden=true;
+
+ adminCheck.onchange=()=>{
+  adminBox.hidden=!adminCheck.checked;
+  if(!adminCheck.checked)adminPass.value='';
+  submit.textContent=adminCheck.checked?'管理者としてログイン':'ログイン';
+ };
+
+ submit.type='submit';
+ submit.onclick=null;
+
+ switcher.onclick=()=>{
+  register=!register;
+  adminLabel.hidden=register;
+  adminBox.hidden=true;
+  adminCheck.checked=false;
+  adminPass.value='';
+  submit.textContent=register?'アカウントを作成':'ログイン';
+  switcher.textContent=register?'ログインに戻る':'新規登録はこちら';
+  setError(err,'');
+ };
+
+ form.onsubmit=async e=>{
+  e.preventDefault();
+  setError(err,'');
+  submit.disabled=true;
+
+  try{
+   const result=await api(
+    register?'/api/register':'/api/login',
+    'POST',
+    {
+     username:name.value,
+     password:pass.value,
+     admin_login:!register&&adminCheck.checked,
+     admin_password:!register&&adminCheck.checked?adminPass.value:''
+    }
+   );
+
+   state.me=result.user;
+   state.officialAdmin=Boolean(result.official_admin);
+   noticeBaseline=null;
+   render();
+   updateNotificationBadge();
+   pollInAppNotices();
+   solaStartRoute();
+  }catch(ex){
+   setError(err,ex.message);
+  }finally{
+   submit.disabled=false;
+  }
+ };
+
+ add(form,name,pass,adminLabel,adminBox,err,submit,switcher);
+ add(box,brandIcon('auth-logo'),heading,
+     el('p','subtle','夕焼け色のチャットアプリ'),form);
+ outer.append(box);
+ root.append(outer);
+}
+
 async function renderChats(main){
   add(main,title('チャット',[button('🔑 グループに入る',()=>navigate('join'),'btn secondary small'),button('＋ グループ作成',createGroup,'btn small')]));
   const loading=card(el('div','sola-skeleton'),el('div','sola-skeleton short'),el('div','sola-skeleton'),el('div','sola-skeleton short'));loading.setAttribute('aria-label','チャットを読み込み中');main.append(loading);
@@ -164,7 +248,7 @@ async function renderChats(main){
       }catch(e){
         // Keep the existing list visible during a temporary connection failure.
       }finally{inFlight=false}
-    },2500);
+    },5000);
   }catch(e){loading.replaceChildren(message(e.message))}
 }
 function renderChatsFresh(){navigate('chats')}
@@ -688,24 +772,146 @@ async function renderNotifications(main){
 }
 function formatDate(value){if(!value)return '';const date=new Date(String(value).replace(' ','T')+(String(value).includes('Z')||String(value).includes('+')?'':'Z'));return isNaN(date.getTime())?String(value):new Intl.DateTimeFormat('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(date)}
 function renderNotificationsFresh(){navigate('notifications')}
+
 async function renderAdminDashboard(main){
  if(!state.officialAdmin){navigate('chats');return}
- main.replaceChildren(title('🛡️ SOLA CHAT 管理者画面',[button('📋 通報を確認',()=>renderAdminReports(main),'btn secondary small')]));
- const content=card(message('管理情報を読み込み中…'));main.append(content);
+
+ main.replaceChildren(
+  title('🛡️ SOLA ADMIN',[
+   button('📋 通報を確認',
+    ()=>renderAdminReports(main),'btn secondary small')
+  ])
+ );
+
+ const content=el('div','sola-admin-dashboard');
+ main.append(content);
+
  try{
-   const data=await api('/api/admin/overview');content.replaceChildren();
-   const stats=el('div','sola-admin-stats');
-   [['👤 ユーザー',data.counts.users],['👥 グループ',data.counts.groups],['💬 メッセージ',data.counts.messages],['⚑ 通報',data.counts.reports]].forEach(([label,value])=>stats.append(card(el('div','subtle',label),el('strong','sola-admin-number',value))));content.append(stats);
-   content.append(el('h3','mutedtitle','最近登録されたユーザー'));
-   const search=field('ユーザー名で絞り込み');content.append(search);
-   const users=el('div','sola-admin-list');content.append(users);
-   function drawUsers(){users.replaceChildren();data.users.filter(u=>u.username.toLowerCase().includes(search.value.toLowerCase())).forEach(u=>{const line=el('div','sola-admin-line');line.append(el('span','grow',u.username+' · '+u.public_code),button('プロフィール',()=>renderUserProfile(main,u.id),'btn secondary small'));users.append(line)});if(!users.children.length)users.append(message('該当するユーザーはいないよ','subtle'))}
-   search.oninput=drawUsers;drawUsers();
-   content.append(el('h3','mutedtitle','最近作られたグループ'));
-   const groups=el('div','sola-admin-list');data.groups.forEach(g=>groups.append(el('div','sola-admin-line',g.name+' · '+g.group_code+' · 作成者：'+(g.owner||'不明'))));if(!data.groups.length)groups.append(message('グループはまだないよ','subtle'));content.append(groups);
-   content.append(el('p','subtle','この画面は閲覧専用。ユーザーやグループの削除は行わないよ。'));
- }catch(e){content.replaceChildren(message(e.message))}
+  const data=await api('/api/admin/overview');
+
+  function section(name){
+   const h=el('h3','sola-admin-section-title',name);
+   content.append(h);
+  }
+
+  const stats=el('div','sola-admin-stats sola-admin-stats-new');
+
+  [
+   ['👥 総ユーザー数',data.counts.users],
+   ['🟢 オンライン',data.counts.online],
+   ['🏠 総ルーム数',data.counts.groups],
+   ['💬 総メッセージ数',data.counts.messages]
+  ].forEach(([label,value])=>{
+   stats.append(card(
+    el('div','subtle',label),
+    el('strong','sola-admin-number',value)
+   ));
+  });
+
+  content.append(stats);
+
+  section('👥 全ユーザー管理');
+
+  const search=field('ユーザー名で検索');
+  content.append(search);
+
+  const statusFilter=el('select','field');
+  [
+   ['all','すべてのユーザー'],
+   ['online','オンラインのみ'],
+   ['offline','オフラインのみ']
+  ].forEach(([value,label])=>{
+   const option=el('option','',label);
+   option.value=value;
+   statusFilter.append(option);
+  });
+  content.append(statusFilter);
+
+  const users=el('div','sola-admin-list');
+  content.append(users);
+
+  function drawUsers(){
+   users.replaceChildren();
+
+   data.users.filter(u=>{
+    const match=u.username.toLowerCase()
+      .includes(search.value.toLowerCase());
+
+    const status=statusFilter.value==='all' ||
+      (statusFilter.value==='online' && u.online) ||
+      (statusFilter.value==='offline' && !u.online);
+
+    return match && status;
+   }).sort((a,b)=>Number(b.online)-Number(a.online))
+   .forEach(u=>{
+    const line=el('div','sola-admin-line sola-admin-user-row');
+
+    const name=el('span','grow',
+      (u.online?'🟢 ':'⚫ ')+u.username+
+      (u.online?' · オンライン':' · オフライン'));
+
+    line.append(
+     name,
+     button('プロフィール',
+      ()=>renderUserProfile(main,u.id),
+      'btn secondary small')
+    );
+    users.append(line);
+   });
+
+   if(!users.children.length)
+    users.append(message('該当するユーザーはいないよ','subtle'));
+  }
+
+  search.oninput=drawUsers;
+  statusFilter.onchange=drawUsers;
+  drawUsers();
+
+  section('🏠 全ルーム管理');
+
+  const groupSearch=field('ルーム名・IDで検索');
+  content.append(groupSearch);
+
+  const groups=el('div','sola-admin-list');
+  content.append(groups);
+
+  function drawGroups(){
+   groups.replaceChildren();
+
+   data.groups.filter(g=>
+    (g.name+' '+g.group_code).toLowerCase()
+      .includes(groupSearch.value.toLowerCase())
+   ).forEach(g=>{
+    const line=el('div','sola-admin-line sola-admin-group-row');
+
+    const info=el('div','grow');
+    info.append(
+     el('strong','',g.name),
+     el('div','subtle','ID: '+g.group_code),
+     el('div','subtle','作成者: '+(g.owner||'不明')),
+     el('div','subtle',
+      '参加者 '+g.members+'人 · メッセージ '+g.messages+'件')
+    );
+
+    line.append(info);
+    groups.append(line);
+   });
+
+   if(!groups.children.length)
+    groups.append(message('該当するルームはないよ','subtle'));
+  }
+
+  groupSearch.oninput=drawGroups;
+  drawGroups();
+
+  content.append(el('p','subtle',
+   '管理者専用ダッシュボード · 最新情報は再表示で更新'));
+
+ }catch(e){
+  content.replaceChildren(message(e.message));
+ }
 }
+
 async function renderAdminReports(main){
   main.replaceChildren(title('運営への通報',[button('← 通知',()=>navigate('notifications'),'btn secondary small')]));
   const filter=el('select','field');[['all','すべて'],['open','未対応'],['reviewing','確認中'],['resolved','対応済み']].forEach(([v,t])=>{const o=el('option','',t);o.value=v;filter.append(o)});
