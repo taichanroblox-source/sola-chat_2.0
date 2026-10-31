@@ -1,0 +1,593 @@
+:root{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","Yu Gothic",sans-serif;color:#503947;background:#fff8f4}*{box-sizing:border-box}body{margin:0}button,input,textarea{font:inherit}button{cursor:pointer;border:0}button:disabled{opacity:.55;cursor:default}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid #b55a8a;outline-offset:2px}.shell{display:flex;min-height:100vh}.sidebar{width:245px;background:linear-gradient(160deg,#f9d2bd,#f7e3dc 55%,#f7d9e8);border-right:1px solid #f0cfc8;padding:24px 14px;display:flex;flex-direction:column;gap:6px;flex-shrink:0}.brand{font-size:23px;font-weight:900;letter-spacing:-.5px;color:#aa456c;margin:8px 10px 28px}.nav{width:100%;padding:13px 14px;text-align:left;border-radius:14px;background:transparent;color:#78505f;font-weight:700}.nav.active,.nav:hover{background:#fff8f3;color:#ad4b69}.nav .symbol{margin-right:10px}.sidebottom{margin-top:auto}.main{flex:1;min-width:0;max-width:980px;margin:0 auto;padding:30px 32px 90px}.top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:20px}.top h1{margin:0;font-size:25px;color:#9c4264}.topactions{display:flex;gap:8px}.card{background:white;border:1px solid #f1dcd5;border-radius:18px;padding:18px;margin-bottom:14px;box-shadow:0 4px 22px #d79b9a10}.subtle{color:#a1818a;font-size:13px}.listitem{width:100%;display:flex;align-items:center;gap:13px;padding:14px 8px;border-bottom:1px solid #f6e7e2;background:transparent;text-align:left;color:inherit}.listitem:last-child{border-bottom:0}.listitem:hover{background:#fff7f4;border-radius:12px}.avatar{width:44px;height:44px;border-radius:50%;background:#f4c5b8;color:#a45470;display:flex;align-items:center;justify-content:center;font-size:21px;font-weight:800;flex-shrink:0}.avatar.small{width:29px;height:29px;font-size:13px}.grow{flex:1;min-width:0}.itemtitle{font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.preview{color:#a58b90;font-size:13px;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pill{font-size:11px;border-radius:20px;padding:3px 8px;background:#f8d4ca;color:#a54d68;font-weight:800}.official{background:#fff0e8;border:1px solid #edc5b7;border-radius:16px;padding:8px 12px}.btn{background:linear-gradient(100deg,#ee9d78,#d86d86);color:white;padding:10px 16px;border-radius:12px;font-weight:800}.btn.secondary{background:#fae9e4;color:#a7506d}.btn.small{padding:7px 10px;font-size:13px}.btn:hover{filter:brightness(.98)}.row{display:flex;align-items:center;gap:10px}.wrap{flex-wrap:wrap}.stack{display:flex;flex-direction:column;gap:12px}.field{width:100%;padding:12px 14px;border:1px solid #e8c9c3;border-radius:12px;background:white;color:#523d47}.label{font-size:13px;font-weight:700;color:#885b6b;margin-bottom:5px;display:block}.mutedtitle{font-weight:800;color:#a9506e;margin:18px 0 9px}.auth{min-height:100vh;display:grid;place-items:center;padding:22px;background:radial-gradient(circle at 80% 15%,#f5c1ad 0,transparent 35%),linear-gradient(145deg,#fff7f1,#f9e1e5)}.authcard{width:min(440px,100%);padding:32px;border-radius:26px;background:white;box-shadow:0 15px 70px #9f596b24}.authcard h1{color:#ae4e6c}.error{color:#b52c45;font-size:13px;min-height:18px}.chatbox{height:calc(100vh - 165px);min-height:430px;display:flex;flex-direction:column;background:#fff9f6;border:1px solid #f0d6cf;border-radius:20px;overflow:hidden}.chatheader{padding:14px 18px;background:#fff;border-bottom:1px solid #f2dfd8;display:flex;align-items:center;gap:12px}.messages{flex:1;overflow:auto;padding:18px;display:flex;flex-direction:column;gap:10px}.bubbleline{display:flex;gap:8px;align-items:flex-end;max-width:100%}.bubbleline.mine{justify-content:flex-end}.bubble{background:#fff;border:1px solid #f2e3dd;border-radius:17px;padding:10px 14px;max-width:min(75%,550px);white-space:pre-wrap;overflow-wrap:anywhere}.mine .bubble{background:#f6b6a1;border-color:#f6b6a1}.sender{font-size:11px;color:#ac7586;margin-bottom:3px}.bubblecol{max-width:min(75%,550px)}.bubblecol .bubble{max-width:100%}.chatcomposer{display:flex;gap:8px;padding:13px;background:white;border-top:1px solid #f2dfd8}.chatcomposer .field{flex:1}.empty{padding:25px 10px;text-align:center;color:#a38b90}.bottomnav{display:none}.loading{padding:40px;text-align:center}.note{background:#fff4eb;border-radius:12px;padding:10px;color:#a16a6c;font-size:13px}@media(max-width:720px){.shell{display:block}.sidebar{display:none}.main{padding:20px 15px 95px}.top h1{font-size:22px}.bottomnav{display:flex;position:fixed;bottom:0;left:0;right:0;justify-content:space-around;background:#fff9f5;border-top:1px solid #eacfc8;padding:8px 4px max(8px,env(safe-area-inset-bottom));z-index:10}.bottomnav button{font-size:11px;background:transparent;color:#936575;padding:7px}.bottomnav button.active{color:#ba5370;font-weight:900}.bottomnav .symbol{display:block;font-size:19px;margin-bottom:3px}.chatbox{height:calc(100dvh - 175px);min-height:330px}.authcard{padding:24px}}
+
+/* SOLA CHAT 2.0: home icon and unified chat list */
+.brandbutton{display:block;width:calc(100% - 20px);padding:0;text-align:left;border:0;background:transparent;font:inherit;cursor:pointer}
+.brandbutton:hover{color:#d06480;filter:brightness(.97)}
+.mobilehome{display:none;border:0;background:transparent;color:#aa456c;font-weight:900;font-size:18px;padding:4px 0 14px;cursor:pointer}
+@media(max-width:720px){.mobilehome{display:block}.top{flex-wrap:wrap}.topactions{flex-wrap:wrap}}
+
+/* Avatar upload */
+.avatar{position:relative;overflow:hidden}.avatar-image{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.avatar-large{width:86px;height:86px;font-size:36px}.avatar-picker{display:none}.avatar-settings{align-items:center;margin-bottom:20px}.avatar-settings .grow{display:flex;flex-direction:column;gap:9px}.avatar-settings .row{gap:8px}
+
+/* SOLA CHAT 2.0 — message features */
+.chat-list-line{display:flex;align-items:center;border-bottom:1px solid #f6e7e2}.chat-list-line:last-child{border-bottom:0}.chat-list-line .listitem{flex:1;min-width:0;border-bottom:0}.pin-button{background:transparent;color:#a45b75;border-radius:10px;padding:12px;font-size:18px}.pin-button:hover{background:#fff1eb}.unread-count{background:#d96980;color:white;border-radius:20px;padding:3px 7px;margin-left:5px;font-size:11px;font-weight:800}.chatheader .itemtitle{flex:1}.chatheader{flex-wrap:wrap}.bubblecol{display:flex;flex-direction:column;align-items:flex-start}.mine .bubblecol{align-items:flex-end}.bubblecol .bubble{min-width:64px}.bubbletext{white-space:pre-wrap;overflow-wrap:anywhere}.quoted{border-left:3px solid #dc8a83;padding:5px 8px;margin-bottom:7px;background:#fff6f0;color:#93636f;border-radius:5px;font-size:12px;max-width:100%;overflow-wrap:anywhere}.message-image{display:block;max-width:min(100%,320px);max-height:350px;object-fit:contain;border-radius:10px;margin-top:6px;cursor:zoom-in}.reaction-row,.message-actions,.reaction-menu{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}.reaction-chip,.tiny-action,.emoji-action{border:1px solid #eacbc8;background:#fff7f2;color:#94596b;border-radius:18px;padding:4px 7px;font-size:12px}.reaction-chip.mine-reaction{background:#f5bfb0;border-color:#e69b92}.tiny-action{font-size:11px;background:transparent;border:0;color:#a58b91}.emoji-action{font-size:17px}.reaction-menu{padding:5px;background:#fff;border:1px solid #f1dcd5;border-radius:12px;box-shadow:0 4px 16px #ad6c7118}.reaction-menu[hidden],.reply-banner[hidden]{display:none}.reply-banner{display:flex;align-items:center;gap:10px;padding:8px 16px;background:#fff0e9;color:#9d6170;font-size:12px}.hidden-file{display:none}.group-management{padding-top:12px}.member-line{display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid #f5e2db}.chosen-theme{outline:2px solid #c26a82;outline-offset:2px}
+/* Theme selection — saved on this device */
+:root[data-theme="pink"]{color:#57394d;background:#fff5fb}
+[data-theme="pink"] .sidebar{background:linear-gradient(155deg,#f8cce4,#fbe8f3)}
+[data-theme="pink"] .btn:not(.secondary){background:linear-gradient(95deg,#ed8bbf,#c76c9b)}
+[data-theme="pink"] .mine .bubble{background:#f5b5d8;border-color:#f5b5d8}
+[data-theme="pink"] .auth{background:linear-gradient(145deg,#fff5fb,#f9dbea)}
+:root[data-theme="night"]{color:#eee8f8;background:#171d31}
+[data-theme="night"] body{background:#171d31;color:#eee8f8}
+[data-theme="night"] .sidebar{background:linear-gradient(160deg,#292b50,#3c2e52);border-color:#555071}
+[data-theme="night"] .main{color:#eee8f8}
+[data-theme="night"] .card,[data-theme="night"] .chatbox,[data-theme="night"] .chatheader,[data-theme="night"] .chatcomposer,[data-theme="night"] .authcard{background:#242b43;color:#eee8f8;border-color:#4a4b65}
+[data-theme="night"] .messages{background:#1e253c}
+[data-theme="night"] .bubble{background:#35405b;color:#fff;border-color:#4d5774}
+[data-theme="night"] .mine .bubble{background:#794b76;border-color:#794b76}
+[data-theme="night"] .field{background:#303a54;color:#fff;border-color:#626480}
+[data-theme="night"] .nav,[data-theme="night"] .brand,[data-theme="night"] .mobilehome,[data-theme="night"] .top h1,[data-theme="night"] .itemtitle{color:#f5c6db}
+[data-theme="night"] .nav.active,[data-theme="night"] .nav:hover,[data-theme="night"] .listitem:hover{background:#3d3856}
+[data-theme="night"] .bottomnav{background:#252b43;border-color:#555071}
+[data-theme="night"] .bottomnav button{color:#e0b8d4}
+[data-theme="night"] .btn.secondary,[data-theme="night"] .reaction-menu,[data-theme="night"] .reaction-chip,[data-theme="night"] .emoji-action,[data-theme="night"] .quoted{background:#414260;color:#f8d8e5;border-color:#626480}
+[data-theme="night"] .reply-banner{background:#33324d;color:#f7c9da}
+@media(max-width:720px){.chatheader{gap:7px}.chatheader .btn{font-size:11px;padding:7px}.message-actions{gap:2px}.message-image{max-width:220px}}
+.chatbox{position:relative}.group-management{position:absolute;z-index:6;top:58px;right:12px;width:min(420px,calc(100% - 24px));max-height:70%;overflow:auto;filter:drop-shadow(0 12px 24px #553d4b33)}.group-management .card{margin:0}
+
+/* SOLA 2.0: group ID join */
+.join-form { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:12px; }
+.join-form .label { flex-basis:100%; }
+.join-form .field { flex:1; min-width:150px; }
+.group-id { font-weight:700; letter-spacing:.02em; }
+/* 2026-10-29: approval-only groups and account safety tools */
+.notification{padding:14px 10px;border-bottom:1px solid #f1e2dd;display:flex;flex-direction:column;gap:7px;overflow-wrap:anywhere}
+.notification:last-child{border-bottom:0}
+.unread-notification{background:#fff0e8;border-left:3px solid #df7892;border-radius:9px}
+.edit-mark{font-size:10px;color:#987885;margin-left:7px}
+.group-management .member-line{flex-wrap:wrap}
+.group-management .member-line .grow{min-width:110px}
+[data-theme="night"] .notification{border-color:#56516d}
+[data-theme="night"] .unread-notification{background:#40314c}
+[data-theme="night"] .edit-mark{color:#e8bdd5}
+
+/* SOLA CHAT 2.0 — sunset icon, fullscreen conversations, notifications, presence */
+.sola-logo{display:block;object-fit:cover;border-radius:14px;box-shadow:0 5px 16px #82476a30}.sola-logo.mini{width:39px;height:39px}.sola-logo.auth-logo{width:110px;height:110px;border-radius:27px;margin:0 auto 16px}.brandbutton,.mobilehome{display:flex;align-items:center;gap:10px}.brandbutton{padding:8px 12px!important}.mobilehome{width:max-content}.chat-home-logo{border:0;background:transparent;padding:0;cursor:pointer}.chat-home-logo:hover{filter:brightness(.93)}
+.shell.chat-mode{display:block!important;width:100%;height:100dvh;min-height:0}.chat-mode .main{padding:0!important;margin:0!important;max-width:none!important;width:100%;height:100dvh;overflow:hidden}.chat-mode .chatbox{height:100dvh!important;min-height:0!important;border-radius:0;border:0;background:linear-gradient(165deg,#55517b 0%,#b66b88 28%,#efab98 60%,#f9d8c5 100%)}.chat-mode .chatheader{min-height:72px;flex-shrink:0;background:#fff9f7ed;backdrop-filter:blur(12px)}.chat-mode .messages{background:linear-gradient(155deg,#49436d99,#ed9c9277,#f6c1a155);padding:24px clamp(14px,5vw,72px)}.chat-mode .chatcomposer{padding:14px clamp(12px,3vw,44px);background:#fff9f5ef}.chat-mode .bubble{box-shadow:0 2px 10px #2c28431b}.chat-mode .mine .bubble{background:#ffd2d0;border-color:#ffd2d0}.chat-mode .sender{color:#fff;font-weight:800;text-shadow:0 1px 4px #49324e88}.chat-mode .chatheader .itemtitle{font-size:17px}.chat-mode .message-actions{opacity:.8}.chat-mode .message-actions:hover{opacity:1}
+.nav-count,.mobile-count{background:#dc5b78;color:white;border-radius:999px;font-size:11px;font-weight:800;padding:2px 7px;margin-left:auto}.mobile-count{position:absolute;top:2px;right:5px;font-size:10px;padding:1px 5px}.bottomnav button{position:relative}.nav-count[hidden],.mobile-count[hidden]{display:none!important}
+.notification-tabs{display:flex;gap:8px;overflow-x:auto;padding:3px 0 15px}.filter-chip{background:#fae7e3;color:#a65873;padding:9px 13px;border-radius:999px;font-size:13px;white-space:nowrap;font-weight:700}.filter-chip.selected{background:#d9728a;color:white}.notification-card{display:flex;gap:13px;padding:16px 12px;border-bottom:1px solid #f0e2df;border-radius:12px}.notification-card:last-child{border-bottom:0}.notification-new{background:#fff0ec;border-left:4px solid #e17891}.notification-body{flex:1;min-width:0}.notification-head{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:7px}.notification-kind{font-weight:800;font-size:12px;color:#a65a73}.notification-time{font-size:11px;color:#9c8b93}.notification-text{font-size:14px;line-height:1.6;overflow-wrap:anywhere}.notification-actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}.notification-system{width:44px;height:44px;border-radius:50%;background:#fae2d9;display:grid;place-items:center;font-size:20px;flex-shrink:0}
+.avatar{overflow:visible}.avatar-image{border-radius:50%}.presence-dot{position:absolute;right:0;bottom:0;width:13px;height:13px;border-radius:50%;border:2px solid white;z-index:1}.presence-dot.is-online{background:#20c875}.presence-dot.is-offline{background:#a9a8b5}
+[data-theme="night"] .notification-new{background:#3c344e}[data-theme="night"] .notification-card{border-color:#55516c}[data-theme="night"] .filter-chip{background:#49415d;color:#f2d2e2}[data-theme="night"] .filter-chip.selected{background:#a65a83;color:white}[data-theme="night"] .chat-mode .chatheader,[data-theme="night"] .chat-mode .chatcomposer{background:#282941f2}[data-theme="night"] .chat-mode .mine .bubble{background:#794b76;border-color:#794b76}
+@media(max-width:720px){.chat-mode .chatheader{min-height:62px;gap:6px;padding:9px}.chat-mode .chatheader .itemtitle{font-size:14px}.chat-mode .chatheader .btn{padding:7px 8px}.chat-mode .chat-home-logo .sola-logo{width:30px;height:30px}.chat-mode .messages{padding:14px}.chat-mode .chatcomposer{padding:9px}.chat-mode .chatcomposer .field{min-width:0}.chat-mode .chatcomposer .btn{padding:9px}}
+
+.chat-title-block{display:flex;flex:1;min-width:0;flex-direction:column;gap:2px}.chat-title-block .itemtitle{flex:initial}.chat-presence{font-size:11px;color:#a47b87}.chat-presence.online{color:#1c9b62;font-weight:800}.chat-presence.offline{color:#9e9da7}
+
+
+/* SOLA CHAT 2.0 — readable text, floating emoji palette, motion polish */
+.chat-mode .message-actions{
+  opacity:1!important;display:flex;flex-wrap:wrap;align-items:center;
+  gap:3px 6px;margin-top:6px;position:relative;z-index:1;
+}
+.chat-mode .tiny-action{
+  color:#563c50!important;font-size:12px;font-weight:750;
+  background:#fffaf5e8;border:1px solid #d9a7a9;
+  border-radius:999px;padding:5px 9px;line-height:1.4;
+  box-shadow:0 1px 4px #3a244a1c;
+  transition:background .18s ease,color .18s ease,transform .18s ease,box-shadow .18s ease;
+}
+.chat-mode .tiny-action:hover,.chat-mode .tiny-action:focus-visible{
+  color:#873e63!important;background:#fff;transform:translateY(-2px);
+  box-shadow:0 5px 12px #3a244a30;
+}
+.chat-mode .bubble,.chat-mode .bubbletext,.chat-mode .quoted{
+  color:#3e2e3b;font-size:15px;line-height:1.55;
+}
+.chat-mode .mine .bubble{color:#392b37;background:#ffd9d5;border-color:#efaaa8}
+.chat-mode .quoted{color:#6b4357;background:#fff6f1;border-left-color:#c55e7c}
+.chat-mode .sender{color:#fff;font-size:13px;text-shadow:0 1px 4px #32243fa8}
+.chat-mode .edit-mark{color:#6c4d5a;font-weight:600}
+.chat-mode .reaction-chip{color:#603d55;background:#fff9f5;border-color:#e7bdba;font-weight:700}
+.chat-mode .reaction-chip.mine-reaction{background:#ffe0c9;border-color:#e7a38e}
+.chat-mode .bubblecol{position:relative;overflow:visible;min-width:0}
+.chat-mode .bubbleline{position:relative;overflow:visible}
+.chat-mode .reaction-menu{
+  position:absolute;z-index:90;right:0;left:auto;bottom:calc(100% - 1px);top:auto;
+  display:flex;flex-wrap:nowrap;align-items:center;gap:4px;
+  width:max-content;max-width:min(92vw,360px);margin:0;padding:7px 9px;
+  background:#fffdfb;box-shadow:0 12px 36px #402f4d55;
+  border:1px solid #e5b9bd;border-radius:999px;
+  transform-origin:85% 100%;animation:solaPaletteIn .2s cubic-bezier(.2,1.4,.3,1) both;
+}
+.chat-mode .reaction-menu[hidden]{display:none!important}
+.chat-mode .bubbleline:not(.mine) .reaction-menu{left:0;right:auto;transform-origin:15% 100%}
+.chat-mode .reaction-menu.menu-below{top:calc(100% + 4px);bottom:auto;transform-origin:50% 0}
+.chat-mode .reaction-open{z-index:95}
+.chat-mode .emoji-action{
+  border:0;background:transparent;color:#3d3141;font-size:23px;
+  padding:4px 5px;line-height:1.2;border-radius:50%;
+  transition:transform .18s cubic-bezier(.2,1.5,.3,1),background .18s;
+}
+.chat-mode .emoji-action:hover,.chat-mode .emoji-action:focus-visible{
+  transform:translateY(-5px) scale(1.27);background:#fff0e9;
+}
+.sola-reaction-burst{
+  position:fixed;pointer-events:none;z-index:9999;font-size:36px;
+  transform:translate(-50%,-50%);filter:drop-shadow(0 4px 8px #51324855);
+  animation:solaReactionBurst .85s cubic-bezier(.18,.7,.3,1) forwards;
+}
+@keyframes solaPaletteIn{
+  from{opacity:0;transform:translateY(8px) scale(.83)}
+  to{opacity:1;transform:translateY(0) scale(1)}
+}
+@keyframes solaReactionBurst{
+  0%{opacity:0;transform:translate(-50%,-25%) scale(.5) rotate(-15deg)}
+  25%{opacity:1;transform:translate(-50%,-75%) scale(1.3) rotate(10deg)}
+  70%{opacity:1;transform:translate(-50%,-155%) scale(1.05) rotate(-7deg)}
+  100%{opacity:0;transform:translate(-50%,-230%) scale(.8) rotate(4deg)}
+}
+@keyframes solaMessageEnter{
+  from{opacity:0;transform:translateY(9px) scale(.975)}
+  to{opacity:1;transform:translateY(0) scale(1)}
+}
+@keyframes solaPageEnter{
+  from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:translateY(0)}
+}
+.chat-mode .bubbleline{animation:solaMessageEnter .26s ease-out both}
+.card,.notification-card{animation:solaPageEnter .26s ease-out both}
+.btn,.nav,.listitem,.chat-home-logo,.reaction-chip,.filter-chip,.avatar{
+  transition:transform .2s cubic-bezier(.2,.8,.2,1),box-shadow .2s ease,background-color .2s ease,filter .2s ease;
+}
+.btn:not(:disabled):active,.reaction-chip:active,.chat-home-logo:active{transform:scale(.96)}
+.listitem:hover{transform:translateX(3px)}
+.notification-new{box-shadow:0 2px 10px #bf61721c}
+.chat-presence.online{color:#147e50;font-weight:800}
+[data-theme="night"] .chat-mode .tiny-action{color:#fff0f6!important;background:#51445e;border-color:#887089}
+[data-theme="night"] .chat-mode .bubble,[data-theme="night"] .chat-mode .bubbletext{color:#fff2f6}
+[data-theme="night"] .chat-mode .mine .bubble{color:#fff2f6}
+[data-theme="night"] .chat-mode .quoted{color:#f9dce9;background:#49405a}
+[data-theme="night"] .chat-mode .reaction-menu{background:#3e3550;border-color:#81657f}
+[data-theme="night"] .chat-mode .emoji-action{color:#fff}
+@media(max-width:720px){
+  .chat-mode .tiny-action{font-size:11px;padding:5px 7px}
+  .chat-mode .reaction-menu{padding:5px 6px;gap:1px}
+  .chat-mode .emoji-action{font-size:21px;padding:4px}
+}
+@media(prefers-reduced-motion:reduce){
+  .chat-mode .bubbleline,.card,.notification-card,.chat-mode .reaction-menu,.sola-reaction-burst{animation:none!important}
+  .btn,.nav,.listitem,.chat-home-logo,.reaction-chip,.filter-chip,.avatar,.chat-mode .tiny-action,.chat-mode .emoji-action{transition:none!important}
+}
+
+
+/* SOLA CHAT 2.0 — floating context actions v2 (right click / long press) */
+.chat-mode .message-actions{display:none!important}
+.chat-mode .bubbleline{user-select:text;-webkit-user-select:text}
+.sola-context-menu{
+  position:fixed;z-index:20000;display:flex;flex-direction:column;gap:8px;
+  width:max-content;max-width:min(92vw,370px);padding:9px;
+  border:1px solid #edc3c9;border-radius:19px;
+  background:rgba(255,251,250,.97);color:#4b3444;
+  box-shadow:0 18px 48px #33233855,0 3px 12px #33233820;
+  backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  transform-origin:var(--sola-pop-origin,50% 100%);
+}
+.sola-context-menu[hidden]{display:none!important}
+.sola-context-menu.sola-context-show{animation:solaContextAppear .27s cubic-bezier(.18,1.45,.32,1) both}
+.sola-context-menu .reaction-menu{
+  position:static!important;display:flex!important;flex-wrap:nowrap!important;
+  gap:3px!important;align-items:center;justify-content:center;
+  margin:0!important;padding:4px 3px 9px!important;
+  border:0!important;border-bottom:1px solid #f0d9dc!important;
+  border-radius:0!important;box-shadow:none!important;
+  background:transparent!important;animation:none!important;transform:none!important;
+}
+.sola-context-menu .message-actions{
+  display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:6px!important;margin:0!important;opacity:1!important;
+}
+.sola-context-menu .tiny-action{
+  display:block!important;padding:9px 10px!important;font-size:12px!important;
+  color:#5c3d51!important;font-weight:750!important;
+  background:#fff1ee!important;border:1px solid #ecd4d4!important;
+  border-radius:11px!important;white-space:nowrap;
+}
+.sola-context-menu .tiny-action:hover,.sola-context-menu .tiny-action:focus-visible{
+  background:#ffe0df!important;color:#873f63!important;transform:translateY(-2px);
+}
+.sola-context-menu .emoji-action{
+  font-size:23px!important;background:transparent!important;border:0!important;
+  padding:6px!important;line-height:1.1;border-radius:50%;
+  transition:transform .18s cubic-bezier(.2,1.7,.3,1),background .15s ease;
+}
+.sola-context-menu .emoji-action:hover,.sola-context-menu .emoji-action:focus-visible{
+  transform:translateY(-5px) scale(1.24);background:#ffe7e4!important;
+}
+@keyframes solaContextAppear{
+  0%{opacity:0;transform:translateY(10px) scale(.78);filter:blur(3px)}
+  65%{opacity:1;transform:translateY(-2px) scale(1.035);filter:blur(0)}
+  100%{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}
+}
+[data-theme="night"] .sola-context-menu{background:#363149f5;color:#fcecf4;border-color:#756178}
+[data-theme="night"] .sola-context-menu .tiny-action{background:#51445e!important;color:#fff0f6!important;border-color:#887089!important}
+[data-theme="night"] .sola-context-menu .reaction-menu{border-bottom-color:#716076!important}
+@media(max-width:420px){.sola-context-menu{max-width:calc(100vw - 20px)}.sola-context-menu .emoji-action{font-size:21px!important;padding:5px!important}}
+@media(prefers-reduced-motion:reduce){.sola-context-menu.sola-context-show{animation:none!important}.sola-context-menu .emoji-action{transition:none!important}}
+
+
+/* SOLA CHAT 2.0 — reaction badges overlay bubble edge (no reflow) */
+.chat-mode .bubble.sola-bubble-with-reactions{
+  position:relative;
+  /* Do not add padding, margin, min-width or min-height here. */
+  overflow:visible;
+}
+.chat-mode .sola-reaction-overlay{
+  position:absolute;
+  z-index:8;
+  bottom:-12px;
+  right:8px;
+  display:flex;
+  align-items:center;
+  flex-wrap:nowrap;
+  gap:3px;
+  width:max-content;
+  max-width:none;
+  margin:0;
+  padding:0;
+  line-height:1;
+  white-space:nowrap;
+  pointer-events:auto;
+  animation:solaReactionBadgeAppear .28s cubic-bezier(.2,1.5,.3,1) both;
+}
+.chat-mode .sola-reaction-overlay-chip{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:3px;
+  flex:0 0 auto;
+  min-width:25px;
+  height:25px;
+  margin:0;
+  padding:2px 6px;
+  border-radius:99px;
+  border:1px solid #ecc9c5;
+  background:#fffaf8;
+  color:#543b48;
+  box-shadow:0 2px 7px #39243726;
+  font-size:14px;
+  font-weight:750;
+  line-height:1;
+  cursor:pointer;
+  transition:transform .16s ease,box-shadow .16s ease;
+}
+.chat-mode .sola-reaction-overlay-chip:hover{
+  transform:translateY(-3px) scale(1.09);
+  box-shadow:0 5px 12px #39243730;
+}
+.chat-mode .sola-reaction-overlay-chip.mine-reaction{background:#ffe9e3;border-color:#e5aba6}
+[data-theme=night] .chat-mode .sola-reaction-overlay-chip{
+  background:#4a4058;color:#fff2f8;border-color:#80677f;
+}
+@keyframes solaReactionBadgeAppear{
+  from{opacity:0;transform:translateY(5px) scale(.8)}
+  to{opacity:1;transform:translateY(0) scale(1)}
+}
+@media(prefers-reduced-motion:reduce){
+  .chat-mode .sola-reaction-overlay{animation:none!important}
+  .chat-mode .sola-reaction-overlay-chip{transition:none!important}
+}
+
+/* SOLA CHAT 2.0 — 11 features */
+:root{--sola-my-bubble:#ffd2d0}
+.chat-mode .mine .bubble,[data-theme="night"] .chat-mode .mine .bubble{background:var(--sola-my-bubble)!important;border-color:var(--sola-my-bubble)!important;color:#372a36!important}
+.privacy-toggle{display:flex;align-items:center;gap:12px;padding:8px 2px;font-weight:650;cursor:pointer}.privacy-toggle input{width:20px;height:20px;accent-color:#ba5d80}
+.palette-row{display:flex;flex-wrap:wrap;gap:10px}.palette-choice{color:#4b3544;border:2px solid #ffffff;box-shadow:0 2px 8px #78475925;border-radius:14px;padding:10px 14px;font-weight:700;transition:transform .2s ease,box-shadow .2s ease}.palette-choice:hover{transform:translateY(-3px);box-shadow:0 5px 15px #78475930}
+.chat-announcement{flex-shrink:0;padding:10px 18px;background:#fff2d9;color:#734b36;border-bottom:1px solid #e6c8a2;font-size:13px;font-weight:700;white-space:pre-wrap;overflow-wrap:anywhere;max-height:120px;overflow:auto}.chat-announcement[hidden]{display:none}
+.sola-gallery{position:absolute;inset:75px 12px 75px;z-index:7;background:#fff9f8f7;backdrop-filter:blur(16px);border:1px solid #e9c7c7;border-radius:20px;padding:18px;overflow:auto;box-shadow:0 16px 60px #392e4740;animation:solaGalleryIn .25s ease-out both}
+.gallery-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(125px,1fr));gap:10px;margin-top:15px}.gallery-image{width:100%;height:135px;object-fit:cover;border-radius:12px;cursor:zoom-in;transition:transform .2s}.gallery-image:hover{transform:scale(1.035)}
+.chat-file{display:block;padding:9px 11px;border-radius:10px;background:#fff9f5;color:#8b4464;font-weight:700;text-decoration:underline;overflow-wrap:anywhere}
+.member-search-results{max-height:310px;overflow-y:auto}.member-search-results .member-line{animation:solaGalleryIn .2s ease both}
+.sola-toast-stack{position:fixed;top:18px;right:18px;z-index:10000;display:flex;flex-direction:column;gap:9px;pointer-events:none;width:min(360px,calc(100vw - 36px))}
+.sola-toast{background:#fff9f8f5;color:#653c50;border:1px solid #f0c7cc;backdrop-filter:blur(14px);border-radius:16px;box-shadow:0 10px 35px #593c5140;padding:13px 16px;font-size:13px;font-weight:700;animation:solaToastIn .32s cubic-bezier(.2,.9,.25,1.2) both;overflow-wrap:anywhere}.sola-toast.leaving{animation:solaToastOut .28s ease-in forwards}
+@keyframes solaToastIn{from{opacity:0;transform:translateY(-12px) scale(.95)}to{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes solaToastOut{to{opacity:0;transform:translateX(20px) scale(.96)}}
+@keyframes solaGalleryIn{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:translateY(0) scale(1)}}
+@media(max-width:720px){.sola-gallery{inset:62px 6px 64px;padding:12px}.chatcomposer .btn{min-width:35px}.sola-toast-stack{top:10px;right:10px}}
+@media(prefers-reduced-motion:reduce){.sola-toast,.sola-toast.leaving,.sola-gallery,.member-search-results .member-line,.palette-choice{animation:none!important;transition:none!important}}
+
+
+/* SOLA CHAT 2.0 — group management polish v1 */
+.chat-mode .group-management{
+  top:76px;right:clamp(8px,2vw,28px);width:min(550px,calc(100% - 16px));
+  max-height:min(78dvh,820px);overflow-y:auto;overscroll-behavior:contain;
+  border-radius:22px;box-shadow:0 22px 65px #36203c50;
+  filter:none;background:#fffaf9;border:1px solid #efd8d4;
+  animation:solaAdminEnter .22s cubic-bezier(.2,.9,.25,1) both;
+}
+.chat-mode .group-management .sola-group-admin-card{background:transparent;border:0;box-shadow:none;padding:22px;margin:0}
+.group-management .sola-group-admin-card > h3{margin:0 0 8px;font-size:22px;letter-spacing:-.03em;color:#633a50}
+.group-management .sola-group-admin-card > .subtle{font-size:13px;line-height:1.6;color:#886879}
+.group-management .group-id{background:#fff0e9;border:1px solid #efcfca;border-radius:10px;padding:9px 11px;letter-spacing:.08em;color:#6c4054;overflow-wrap:anywhere}
+.group-management .sola-group-notice{background:#fff4eb;border:1px solid #f2d8c7;border-radius:16px;padding:15px 16px;margin:16px 0 14px}
+.group-management .sola-group-notice h4{margin:0 0 8px;font-size:16px;color:#8f4b61}
+.group-management .sola-group-notice p{margin:0;color:#7c6570;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}
+.group-management .sola-group-action-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:12px 0 20px}
+.group-management .sola-group-action-grid .btn{min-height:44px;width:100%;padding:10px 12px;font-size:13px;line-height:1.35;text-align:center;white-space:normal;border:1px solid #efd7d4;background:#fae9e5;color:#934d69;border-radius:12px}
+.group-management .sola-group-action-grid .btn:hover{background:#f6ddd7;transform:translateY(-1px)}
+.group-management .sola-group-action-grid .btn:focus-visible{outline:3px solid #ad5a83;outline-offset:2px}
+.group-management .sola-group-section-heading{font-size:17px;font-weight:800;color:#613d50;margin:20px 0 12px;padding:0 0 10px;border-bottom:1px solid #f0d9d7}
+.group-management .member-search-results{max-height:420px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;margin-top:12px;padding:1px 3px 6px}
+.group-management .member-search-results .member-line{display:grid;grid-template-columns:44px minmax(0,1fr);gap:9px 12px;align-items:center;border:1px solid #f0dfda;background:#fff;border-radius:15px;padding:13px;margin:0;min-width:0}
+.group-management .member-search-results .member-line > .avatar{grid-column:1;grid-row:1}
+.group-management .member-search-results .member-line > .grow{grid-column:2;grid-row:1;min-width:0;font-size:14px;font-weight:700;line-height:1.55;color:#533b49;overflow-wrap:anywhere}
+.group-management .sola-member-actions{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:7px;margin-top:2px}
+.group-management .sola-member-actions .btn{flex:1 1 140px;min-width:0;font-size:12px;min-height:36px;line-height:1.3;padding:8px 10px;border:1px solid #efd8d5;background:#fae9e5;color:#874b62;white-space:normal}
+.group-management .sola-member-actions .btn.sola-danger{background:#fff1ee;color:#a34352;border-color:#efc8c8}
+.group-management .member-line:not(.sola-member-card){gap:8px;flex-wrap:wrap;padding:11px 0}
+.group-management .member-line:not(.sola-member-card) .grow{min-width:110px}
+.group-management .field{min-height:44px;border-radius:12px}
+.group-management .sola-admin-close{position:sticky;top:0;float:right;z-index:2;width:34px;height:34px;border-radius:50%;background:#fae7e4;color:#7c4c60;font-size:20px;line-height:1}
+@keyframes solaAdminEnter{from{opacity:0;transform:translateY(8px) scale(.985)}to{opacity:1;transform:translateY(0) scale(1)}}
+@media(max-width:600px){
+  .chat-mode .group-management{top:62px;right:5px;width:calc(100% - 10px);max-height:calc(100dvh - 136px);border-radius:17px}
+  .chat-mode .group-management .sola-group-admin-card{padding:15px}
+  .group-management .sola-group-action-grid{grid-template-columns:1fr}
+  .group-management .sola-member-actions{display:grid;grid-template-columns:1fr 1fr;width:100%}
+  .group-management .sola-member-actions .btn{width:100%}
+}
+[data-theme="night"] .chat-mode .group-management{background:#28283d;border-color:#5e5068}
+[data-theme="night"] .group-management .sola-group-admin-card,[data-theme="night"] .group-management .member-search-results .member-line{background:transparent;color:#f3e7f2;border-color:#5d5066}
+[data-theme="night"] .group-management .sola-group-admin-card > h3,[data-theme="night"] .group-management .sola-group-section-heading,[data-theme="night"] .group-management .member-search-results .member-line > .grow{color:#f8e7f0}
+[data-theme="night"] .group-management .sola-group-notice,[data-theme="night"] .group-management .group-id{background:#3d344a;border-color:#66536c;color:#f4d6e7}
+[data-theme="night"] .group-management .sola-group-action-grid .btn,[data-theme="night"] .group-management .sola-member-actions .btn{background:#463b51;color:#f7d9e7;border-color:#6c5a72}
+@media(prefers-reduced-motion:reduce){.chat-mode .group-management{animation:none!important}}
+
+
+/* SOLA CHAT 2.0: compact floating message menu */
+.sola-context-menu {
+  box-sizing: border-box !important;
+  width: min(296px, calc(100vw - 20px)) !important;
+  max-width: calc(100vw - 20px) !important;
+  padding: 8px !important;
+  gap: 5px !important;
+  border-radius: 16px !important;
+}
+.sola-context-menu .reaction-menu {
+  display: grid !important;
+  grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
+  gap: 2px !important;
+  padding: 0 0 7px !important;
+  justify-items: center !important;
+  align-items: center !important;
+}
+.sola-context-menu .emoji-action {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-sizing: border-box !important;
+  width: 36px !important;
+  height: 36px !important;
+  min-width: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  font-size: 23px !important;
+  line-height: 1 !important;
+  border: 0 !important;
+  border-radius: 10px !important;
+  background: transparent !important;
+  outline: none !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+.sola-context-menu .emoji-action:hover {
+  transform: translateY(-2px) scale(1.08) !important;
+  background: #ffe9e6 !important;
+}
+.sola-context-menu .emoji-action:focus-visible {
+  outline: 2px solid #b55a8a !important;
+  outline-offset: -2px !important;
+  transform: none !important;
+}
+.sola-context-menu .message-actions {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 5px !important;
+}
+.sola-context-menu .tiny-action {
+  min-width: 0 !important;
+  min-height: 35px !important;
+  padding: 6px 7px !important;
+  border-radius: 9px !important;
+  font-size: 12px !important;
+  line-height: 1.25 !important;
+  text-align: center !important;
+}
+@media (max-width: 360px) {
+  .sola-context-menu { width: min(280px, calc(100vw - 16px)) !important; }
+  .sola-context-menu .emoji-action { width: 32px !important; height: 34px !important; font-size: 21px !important; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sola-context-menu.sola-context-show { animation: none !important; }
+}
+
+/* SOLA CHAT 2.0: extra-small context menu */
+.sola-context-menu {
+  width: min(236px, calc(100vw - 16px)) !important;
+  max-width: calc(100vw - 16px) !important;
+  padding: 6px !important;
+  border-radius: 13px !important;
+  gap: 3px !important;
+}
+.sola-context-menu .reaction-menu {
+  grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
+  gap: 1px !important;
+  padding: 0 0 5px !important;
+}
+.sola-context-menu .emoji-action {
+  width: 29px !important;
+  height: 30px !important;
+  font-size: 19px !important;
+  border-radius: 8px !important;
+  padding: 0 !important;
+  min-height: 0 !important;
+}
+.sola-context-menu .message-actions { gap: 4px !important; }
+.sola-context-menu .tiny-action {
+  min-height: 29px !important;
+  padding: 5px 4px !important;
+  font-size: 11px !important;
+  border-radius: 8px !important;
+}
+
+/* SOLA CHAT 2.0: additive accessibility + motion improvements */
+.sola-page-enter{animation:solaPageIn .24s cubic-bezier(.2,.8,.2,1) both}
+@keyframes solaPageIn{from{opacity:.5;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.sola-typing{align-self:flex-start;max-width:max-content;margin:5px 14px;padding:8px 12px;border-radius:15px;background:var(--card,#fff);color:var(--text,#5c4450);font-size:12px;animation:solaTypingIn .2s ease both}
+.sola-typing:not([hidden]){display:block}.sola-typing[hidden]{display:none!important}
+@keyframes solaTypingIn{from{opacity:0;transform:translateY(4px) scale(.94)}to{opacity:1;transform:none}}
+.sola-qr{display:block;width:152px;height:152px;max-width:100%;object-fit:contain;border-radius:12px;background:white;padding:8px;margin:10px auto}
+.sola-connection-banner{position:fixed;z-index:99999;left:50%;top:12px;transform:translateX(-50%);background:#573a48;color:white;padding:9px 15px;border-radius:12px;box-shadow:0 8px 25px #0002;font-size:13px}
+[data-bubble-shape="soft"] .bubble{border-radius:11px!important}
+[data-bubble-shape="square"] .bubble{border-radius:5px!important}
+.bubbleline{animation:solaMessageEnter .18s ease-out both}
+@keyframes solaMessageEnter{from{opacity:.5;transform:translateY(5px)}to{opacity:1;transform:none}}
+.sola-reaction-burst{animation:solaBurst .65s cubic-bezier(.2,.8,.2,1) both!important}
+@keyframes solaBurst{0%{opacity:0;transform:translate(-50%,-50%) scale(.4)}40%{opacity:1;transform:translate(-50%,-90%) scale(1.5)}100%{opacity:0;transform:translate(-50%,-130%) scale(.85)}}
+.notification-new{animation:solaPageIn .24s ease both}
+@media(prefers-reduced-motion:reduce){.sola-page-enter,.bubbleline,.sola-typing,.notification-new,.sola-reaction-burst{animation:none!important}}
+
+/* 2026-10-30: chat view respects the selected theme, including full-screen mode. */
+[data-theme="pink"] .chat-mode .chatbox{background:linear-gradient(155deg,#f9e4f4,#f3c8e1 55%,#f8e7f4)!important}
+[data-theme="pink"] .chat-mode .messages{background:linear-gradient(145deg,#eebbd8,#fce2f0 55%,#f7d4e8)!important}
+[data-theme="pink"] .chat-mode .chatheader,[data-theme="pink"] .chat-mode .chatcomposer{background:#fff5fbee!important;color:#6c4161}
+[data-theme="pink"] .chat-mode .sender{color:#8d4d73;text-shadow:none}
+[data-theme="night"] .chat-mode .chatbox{background:#1b2036!important}
+[data-theme="night"] .chat-mode .messages{background:linear-gradient(145deg,#1b2036,#282744 70%,#33304a)!important}
+[data-theme="night"] .chat-mode .chatheader,[data-theme="night"] .chat-mode .chatcomposer{background:#24283ef5!important;color:#f4e5f0}
+[data-theme="night"] .chat-mode .sender{color:#f3c9df;text-shadow:none}
+[data-theme="night"] .chat-mode .bubble:not(.mine .bubble){background:#363951;color:#f8eaf5;border-color:#56516b}
+.sola-admin-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.sola-admin-stats .card{margin:0;padding:14px}
+.sola-admin-number{display:block;font-size:25px;margin-top:5px}
+.sola-admin-line{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 4px;border-bottom:1px solid #e7d8dc;overflow-wrap:anywhere}
+.sola-admin-line:last-child{border-bottom:0}
+@media(min-width:900px){.sola-admin-stats{grid-template-columns:repeat(4,minmax(0,1fr))}}
+
+/* SOLA CHAT 2.0 — compact my page, round bubbles only */
+.sola-profile-page{max-width:980px!important;padding-top:18px!important}
+.sola-profile-page .top{margin-bottom:10px}
+.sola-profile-page .top h1{font-size:22px}
+.sola-profile-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:10px 12px;align-items:start}
+.sola-profile-grid .card{margin:0;padding:13px 15px;border-radius:15px;min-width:0}
+.sola-profile-grid .card h3{font-size:14px;margin:0 0 9px;color:var(--text,#95516b)}
+.sola-profile-grid .btn.small{font-size:12px;padding:7px 10px}
+.sola-profile-grid .field{padding:8px 10px;border-radius:9px;font-size:13px}
+.sola-profile-grid textarea{resize:vertical;min-height:54px;max-height:100px}
+.sola-profile-grid .label{margin:8px 0 5px;font-size:12px}
+.sola-profile-identity{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.sola-profile-identity .avatar-large{width:58px;height:58px;font-size:25px}
+.sola-profile-identity-details{flex:1;min-width:0}
+.sola-profile-identity-details .itemtitle{font-size:15px;margin-bottom:5px}
+.sola-profile-identity-details .row{gap:5px}
+.sola-profile-status{font-size:10px;margin-top:4px;line-height:1.2}
+.sola-profile-qr-details{margin-top:8px;font-size:12px}
+.sola-profile-qr-details summary{cursor:pointer;color:#aa5877;font-weight:700}
+.sola-profile-qr-details .sola-qr{width:118px;height:118px;margin:7px 0 0}
+.sola-profile-choice-row,.sola-profile-tool-row{display:flex;gap:6px;flex-wrap:wrap}
+.sola-profile-choice-row .btn{flex:1;min-width:max-content}
+.sola-profile-colors{display:flex;gap:9px;flex-wrap:wrap}
+.sola-profile-swatch{height:27px;width:27px;border:2px solid #ffffff;border-radius:50%;box-shadow:0 0 0 1px #d6aeb5;cursor:pointer}
+.sola-profile-swatch:focus-visible{outline:3px solid #a04d7a;outline-offset:2px}
+[data-bubble-shape="soft"] .bubble,[data-bubble-shape="square"] .bubble{border-radius:17px!important}
+@media(min-width:721px){.sola-profile-grid .sola-profile-main{grid-row:span 2}}
+@media(max-width:720px){.sola-profile-page{padding:12px 12px 90px!important}.sola-profile-grid{grid-template-columns:minmax(0,1fr);gap:8px}.sola-profile-grid .card{padding:10px 12px}.sola-profile-grid .sola-profile-main{grid-row:auto}.sola-profile-identity .avatar-large{width:48px;height:48px;font-size:22px}.sola-profile-page .top{margin-bottom:8px}}
+
+
+/* SOLA 2.0: balanced, gap-free profile columns + visible QR */
+.sola-profile-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:start;gap:12px}
+.sola-profile-column{display:flex;flex-direction:column;gap:12px;min-width:0}
+.sola-profile-grid .sola-profile-main{grid-row:auto!important}
+.sola-profile-grid .card{width:100%;margin:0!important}
+.sola-profile-grid .avatar-picker{display:none!important}
+.sola-profile-qr-image{display:block!important;width:130px!important;height:130px!important;margin:8px auto 0!important;image-rendering:auto}
+.sola-qr-actions{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+.sola-profile-grid .sola-profile-tool-row{gap:6px}
+.sola-profile-grid .sola-profile-tool-row .btn{white-space:normal}
+.sola-qr-overlay{position:fixed;inset:0;z-index:10000;background:#261b2dbb;display:flex;align-items:center;justify-content:center;padding:15px}
+.sola-qr-dialog{width:min(420px,100%);max-height:calc(100dvh - 30px);overflow:auto;background:#fffaf8;color:#543848;border:1px solid #efcbc8;border-radius:20px;padding:17px;box-shadow:0 15px 60px #23152150}
+.sola-qr-dialog-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.sola-qr-dialog-heading h2{font-size:18px;margin:0}
+.sola-qr-hint{font-size:13px;color:#915d72;line-height:1.5;margin:10px 0}
+.sola-qr-video{display:block;width:100%;max-height:280px;object-fit:cover;border-radius:12px;background:#2d2332;margin:8px 0}
+.sola-qr-video[hidden]{display:none!important}
+.sola-qr-dialog-actions{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+.sola-qr-manual{display:flex;gap:7px;align-items:center;margin-top:10px}
+.sola-qr-manual .field{min-width:0;flex:1}
+.sola-qr-manual .btn{flex-shrink:0}
+[data-theme="night"] .sola-qr-dialog{background:#242b43;color:#f3e8f5;border-color:#62526c}
+[data-theme="night"] .sola-qr-hint{color:#e4b5ce}
+@media(max-width:720px){.sola-profile-grid{grid-template-columns:minmax(0,1fr)}.sola-profile-column{gap:8px}.sola-profile-qr-image{width:124px!important;height:124px!important}.sola-qr-manual{flex-wrap:wrap}.sola-qr-manual .field{flex-basis:100%}}
+
+/* SOLA ELEVEN FEATURES 2026 */
+.sola-skeleton{height:45px;margin:10px 0;border-radius:12px;background:linear-gradient(100deg,#f2e4e1 10%,#fff8f4 45%,#f2e4e1 80%);background-size:200% 100%;animation:solaSkeleton 1.3s linear infinite}.sola-skeleton.short{width:65%}@keyframes solaSkeleton{to{background-position-x:-200%}}
+.sola-jump-latest{position:absolute;right:22px;bottom:95px;z-index:5;background:#fff8f4;color:#a34e72;border:1px solid #e5b7c6;padding:9px 14px;border-radius:99px;font-weight:700;box-shadow:0 4px 16px #0002}.sola-jump-latest[hidden],.sola-upload-progress[hidden],.sola-drop-hint[hidden]{display:none!important}
+.sola-upload-progress{display:flex;align-items:center;gap:12px;padding:7px 18px;background:#fff8f4;color:#8b4569;font-size:12px}.sola-upload-progress progress{flex:1;accent-color:#d87597;height:10px}.sola-drop-hint{position:absolute;inset:76px 12px 90px;z-index:8;display:grid;place-items:center;background:#fff8f4e8;border:3px dashed #bd7291;border-radius:16px;color:#9e4e70;font-weight:800;pointer-events:none}
+.sola-login-history{max-height:180px;overflow:auto}.sola-history-line{padding:7px 0;border-bottom:1px solid #e9d9d7;font-size:12px;overflow-wrap:anywhere}
+@media(prefers-reduced-motion:reduce){.sola-skeleton{animation:none}}
+
+/* SOLA GROUP COMPACT HISTORY FIX 2026 */
+/* More compact admin panel, without changing other pages */
+.chat-mode .group-management {
+  width:min(490px,calc(100% - 16px));
+  max-height:min(80dvh,760px);
+  border-radius:16px;
+}
+.chat-mode .group-management .sola-group-admin-card {padding:14px 16px 16px;}
+.group-management .sola-group-admin-card > h3 {font-size:19px;margin:0 0 4px;}
+.group-management .sola-group-admin-card > .subtle {font-size:12px;line-height:1.35;}
+.group-management .group-id {padding:6px 9px;font-size:13px;letter-spacing:.04em;}
+.group-management .sola-group-action-grid {gap:6px;margin:9px 0 10px;}
+.group-management .sola-group-action-grid .btn {min-height:33px;padding:6px 8px;font-size:12px;border-radius:9px;}
+.group-management .sola-group-section-heading {font-size:15px;margin:12px 0 7px;padding-bottom:6px;}
+.group-management .sola-group-admin-card > p.subtle {margin:5px 0;font-size:12px;line-height:1.35;}
+.group-management .member-search-results {gap:6px;margin-top:7px;max-height:270px;}
+.group-management .member-search-results .member-line {padding:8px 10px;gap:5px 9px;grid-template-columns:34px minmax(0,1fr);border-radius:10px;}
+.group-management .member-search-results .member-line > .avatar {width:34px;height:34px;}
+.group-management .member-search-results .member-line > .grow {font-size:12px;}
+.group-management .sola-member-actions {gap:5px;margin-top:0;}
+.group-management .sola-member-actions .btn {min-height:30px;padding:5px 7px;font-size:11px;flex-basis:110px;}
+.group-management .field {min-height:34px;padding:6px 9px;}
+.group-management .sola-admin-close {width:30px;height:30px;font-size:18px;}
+.group-management .sola-group-history {max-height:220px;overflow-y:auto;margin:8px 0;padding:8px 10px;border:1px solid #efd9d5;border-radius:10px;background:#fff8f5;}
+.group-management .sola-group-history[hidden] {display:none!important;}
+.group-management .sola-group-history h4 {font-size:13px;margin:7px 0 4px;}
+.group-management .sola-group-history p {font-size:12px;line-height:1.4;margin:4px 0;overflow-wrap:anywhere;}
+.group-management .sola-group-notice {display:none!important;}
+[data-theme="night"] .group-management .sola-group-history {background:#342d41;border-color:#66536c;}
+@media(max-width:600px){
+  .chat-mode .group-management {right:5px;width:calc(100% - 10px);max-height:calc(100dvh - 125px);}
+  .chat-mode .group-management .sola-group-admin-card {padding:12px;}
+  .group-management .sola-group-action-grid {grid-template-columns:repeat(2,minmax(0,1fr));}
+  .group-management .sola-group-action-grid .btn {font-size:11px;}
+  .group-management .sola-member-actions {grid-template-columns:repeat(2,minmax(0,1fr));}
+}
+
+/* SOLA26 STYLES */
+.sola26-system{align-self:center;margin:8px auto;padding:7px 15px;border-radius:99px;background:color-mix(in srgb,#f1cad6 55%,transparent);color:#824565;font-size:12px;text-align:center;max-width:85%;overflow-wrap:anywhere}
+.sola26-link{display:flex;flex-direction:column;gap:4px;margin-top:7px;padding:9px 11px;border:1px solid #dba2b8;background:#fff9f8;border-radius:12px;text-decoration:none;color:#84415f;max-width:330px;overflow-wrap:anywhere}
+.sola26-link-title{font-weight:750}.sola26-link-url{font-size:11px;opacity:.75;word-break:break-all}
+.sola26-empty{text-align:center;padding:25px 10px;color:#986c7f;font-size:14px}
+.sola26-maintenance{position:sticky;top:0;z-index:100;background:#ffe2cc;color:#753b51;text-align:center;padding:8px 16px;font-size:13px;font-weight:650}
+.sola26-back-top{display:block;margin:18px auto;padding:8px 14px;border:1px solid #e2b3c5;border-radius:99px;background:#fff8f8;color:#92496a;cursor:pointer}
+.sola26-member-sort{max-width:210px;margin:6px 0}.sola26-load-old{display:block;margin:8px auto;border-radius:99px}
+.sola26-reply-target{cursor:pointer;border-left:3px solid #b86b8c}.sola26-reply-highlight{outline:3px solid #db85a7;outline-offset:3px}
+.sola26-upload-cancel{background:#f8e3e8;border:1px solid #dba2b8;color:#9e3d66;border-radius:8px;padding:5px 8px;cursor:pointer}
+.sola26-metrics{max-height:190px;overflow:auto}
+@media(min-width:700px) and (max-width:1199px) and (pointer:coarse){.shell{--sola-ipad:1}.sidebar{width:195px;flex-shrink:0}.chatheader{gap:8px}.chatcomposer{padding-bottom:max(10px,env(safe-area-inset-bottom))}.group-management{max-width:min(92vw,650px)}}
+@media(max-width:699px){.shell,.main,.chatbox{min-width:0}.chatheader{flex-wrap:wrap}.chatcomposer{padding-bottom:max(9px,env(safe-area-inset-bottom));min-height:55px}.chatcomposer input{min-width:0;font-size:16px}.chatbox{height:100dvh;max-height:100dvh}.messages{overscroll-behavior:contain}.topactions{flex-wrap:wrap}.card{max-width:100%;overflow-wrap:anywhere}}
+@supports(height:100dvh){.shell.chat-mode,.shell.chat-mode .main{min-height:100dvh}}
+@media(prefers-reduced-motion:reduce){.sola26-reply-highlight{transition:none}}
+
+@media(max-width:699px){.chatbox{height:var(--sola26-viewport-height,100dvh)}}
+
+/* SOLA_AUTO_OLDER_SCROLL_V1 */
+.sola-auto-older-status{text-align:center;padding:7px 10px;font-size:12px;opacity:.75}
+.sola-auto-older-status[hidden]{display:none!important}

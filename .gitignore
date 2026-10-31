@@ -1,0 +1,16 @@
+.env
+.env.*
+.sola2_secret
+*secret*
+*.key
+*.db
+*.sqlite
+*.sqlite3
+.venv/
+venv/
+__pycache__/
+*.pyc
+*backup*/
+*BACKUP*/
+*.before_*
+.DS_Store
