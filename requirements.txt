@@ -5,3 +5,5 @@ Pillow>=10.0,<13
 
 qrcode[pil]>=7.4,<9
 gunicorn>=23,<24
+
+cryptography>=42,<47

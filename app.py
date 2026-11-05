@@ -1,4 +1,5 @@
 import os
+import json
 import re
 import secrets
 import hmac
@@ -7,11 +8,11 @@ import time
 import sqlite3
 import mimetypes
 from io import BytesIO
-from datetime import timedelta
+from datetime import timedelta, datetime, timezone
 from functools import wraps
 from pathlib import Path
 
-from flask import Flask, g, jsonify, render_template, request, session, Response, send_file, redirect
+from flask import make_response, Flask, g, jsonify, render_template, request, session, Response, send_file, redirect
 from werkzeug.security import check_password_hash, generate_password_hash
 from PIL import Image, ImageOps, UnidentifiedImageError
 
@@ -22,8 +23,11 @@ except ImportError:
     psycopg = None
 
 BASE = Path(__file__).resolve().parent
+# Stable local storage independent of ZIP/extraction folder.
+DATA_DIR = Path(os.getenv('SOLA_DATA_DIR', str(Path.home() / 'SOLA-DATA'))).expanduser()
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+secret_file = DATA_DIR / '.sola2_secret'
 app = Flask(__name__)
-secret_file = BASE / '.sola2_secret'
 if os.getenv('SECRET_KEY'):
     app.secret_key = os.environ['SECRET_KEY']
 elif secret_file.exists():
@@ -32,12 +36,26 @@ else:
     app.secret_key = secrets.token_hex(32)
     secret_file.write_text(app.secret_key)
     os.chmod(secret_file, 0o600)
-app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=os.getenv('COOKIE_SECURE') == '1', PERMANENT_SESSION_LIFETIME=timedelta(days=30), MAX_CONTENT_LENGTH=4*1024*1024)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=os.getenv('COOKIE_SECURE') == '1', PERMANENT_SESSION_LIFETIME=timedelta(days=365), MAX_CONTENT_LENGTH=4*1024*1024)
 DATABASE_URL = os.getenv('DATABASE_URL', '').strip()
 IS_PG = bool(DATABASE_URL)
 GROUP_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-OFFICIAL_ADMINS = {x.strip().lower() for x in os.getenv('SOLA_OFFICIAL_ADMINS', '').split(',') if x.strip()}
+# Admin settings live outside extracted release folders and are never overwritten by updates.
+ADMIN_SETTINGS_PATH = DATA_DIR / 'admin_settings.json'
+def load_admin_settings():
+    if ADMIN_SETTINGS_PATH.exists():
+        try:
+            data = json.loads(ADMIN_SETTINGS_PATH.read_text(encoding='utf-8'))
+            if isinstance(data, dict) and isinstance(data.get('username'), str) and isinstance(data.get('password_hash'), str):
+                return data
+        except (OSError, ValueError):
+            app.logger.warning('管理者設定を読み込めません。設定ファイルを確認してください')
+    return {}
 
+ADMIN_SETTINGS = load_admin_settings()
+OFFICIAL_ADMINS = ({ADMIN_SETTINGS['username'].strip().lower()} if ADMIN_SETTINGS else
+                   {x.strip().lower() for x in os.getenv('SOLA_OFFICIAL_ADMINS', '').split(',') if x.strip()})
+ADMIN_PASSWORD_HASH = ADMIN_SETTINGS.get('password_hash') or os.getenv('SOLA_ADMIN_PASSWORD_HASH', '').strip()
 
 
 def sola_admin_authenticated():
@@ -45,8 +63,7 @@ def sola_admin_authenticated():
     return bool(
         user
         and user['username'].lower() in OFFICIAL_ADMINS
-        and session.get('sola_admin') is True
-        and os.getenv('SOLA_ADMIN_PASSWORD_HASH', '').strip()
+        and bool((one('SELECT sola_id_hash FROM sola2_users WHERE id=%s', (user['id'],)) or {}).get('sola_id_hash'))
     )
 
 
@@ -57,7 +74,7 @@ def db():
                 raise RuntimeError('Install psycopg[binary]')
             g.db = psycopg.connect(DATABASE_URL, row_factory=dict_row)
         else:
-            g.db = sqlite3.connect(BASE / 'sola2_local.db')
+            g.db = sqlite3.connect(DATA_DIR / 'sola2_local.db')
             g.db.row_factory = sqlite3.Row
             g.db.execute('PRAGMA foreign_keys = ON')
     return g.db
@@ -113,6 +130,12 @@ def init_db():
             'CREATE INDEX IF NOT EXISTS sola2_members_user_idx ON sola2_members(user_id,joined_at)',
         ]:
             run(statement)
+        # v47: official announcements and per-user read receipts.
+        run(f"CREATE TABLE IF NOT EXISTS sola47_announcements (id {pk}, title TEXT NOT NULL, body TEXT NOT NULL, importance TEXT NOT NULL DEFAULT 'normal', created_by BIGINT REFERENCES sola2_users(id), created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+        run("CREATE TABLE IF NOT EXISTS sola47_announcement_reads (announcement_id BIGINT NOT NULL REFERENCES sola47_announcements(id) ON DELETE CASCADE, user_id BIGINT NOT NULL REFERENCES sola2_users(id), PRIMARY KEY(announcement_id,user_id))")
+        # v23: persistent per-group bans, including official groups.
+        run("CREATE TABLE IF NOT EXISTS sola2_group_bans (chat_id BIGINT NOT NULL REFERENCES sola2_chats(id), user_id BIGINT NOT NULL REFERENCES sola2_users(id), banned_by BIGINT REFERENCES sola2_users(id), reason TEXT NOT NULL DEFAULT '', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(chat_id,user_id))")
+        run("CREATE INDEX IF NOT EXISTS sola2_group_bans_user_idx ON sola2_group_bans(user_id,chat_id)")
         # SOLA ELEVEN FEATURES 2026 — additive authentication audit tables.
         run(f"CREATE TABLE IF NOT EXISTS sola2_login_history (id {pk}, user_id BIGINT NOT NULL REFERENCES sola2_users(id), device TEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)")
         run("CREATE INDEX IF NOT EXISTS sola2_login_history_user_idx ON sola2_login_history(user_id,id)")
@@ -127,8 +150,8 @@ def init_db():
             if 'reply_to' not in cols:
                 run('ALTER TABLE sola2_messages ADD COLUMN reply_to BIGINT REFERENCES sola2_messages(id)')
         additions = {
-            'sola2_users': [('last_seen', 'TIMESTAMP'),('hide_online','INTEGER NOT NULL DEFAULT 0'),('profile_scope',"TEXT NOT NULL DEFAULT 'all'"),('online_mode',"TEXT NOT NULL DEFAULT 'online'"),('public_code','TEXT')],
-            'sola2_chats': [('description', "TEXT NOT NULL DEFAULT ''"),('announcement',"TEXT NOT NULL DEFAULT ''")],
+            'sola2_users': [('last_seen', 'TIMESTAMP'),('hide_online','INTEGER NOT NULL DEFAULT 0'),('profile_scope',"TEXT NOT NULL DEFAULT 'all'"),('online_mode',"TEXT NOT NULL DEFAULT 'online'"),('public_code','TEXT'),('sola_id_hash','TEXT'),('sola_id_encrypted','TEXT')],
+            'sola2_chats': [('description', "TEXT NOT NULL DEFAULT ''"),('announcement',"TEXT NOT NULL DEFAULT ''"),('join_mode',"TEXT NOT NULL DEFAULT 'approval'")],
             'sola2_messages': [('edited_at', 'TIMESTAMP'), ('deleted_at', 'TIMESTAMP')],
         }
         for table, columns in additions.items():
@@ -138,6 +161,7 @@ def init_db():
                     run(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
         # Random, stable, unique 8-character public profile IDs. Existing users are backfilled.
         run('CREATE UNIQUE INDEX IF NOT EXISTS sola2_users_public_code_unique ON sola2_users(public_code)')
+        run('CREATE UNIQUE INDEX IF NOT EXISTS sola2_users_sola_id_hash_unique ON sola2_users(sola_id_hash)')
         for user in rows("SELECT id FROM sola2_users WHERE public_code IS NULL OR public_code=''"):
             run('UPDATE sola2_users SET public_code=%s WHERE id=%s',(new_public_code(),user['id']))
         # Stable public IDs: no changes to the numeric database primary keys.
@@ -164,7 +188,7 @@ def init_db():
             'sola2_chats': [('max_members','INTEGER NOT NULL DEFAULT 100')],
             'sola2_messages': [('is_system','INTEGER NOT NULL DEFAULT 0')],
             'sola2_reports': [('status',"TEXT NOT NULL DEFAULT 'open'")],
-            'sola2_users': [('suspended','INTEGER NOT NULL DEFAULT 0'),('suspension_reason',"TEXT NOT NULL DEFAULT ''")],
+            'sola2_users': [('suspended','INTEGER NOT NULL DEFAULT 0'),('suspension_reason',"TEXT NOT NULL DEFAULT ''"),('deleted_at','TIMESTAMP')],
         }.items():
             existing = {x['column_name'] for x in rows('SELECT column_name FROM information_schema.columns WHERE table_name=%s',(table,))} if IS_PG else {x['name'] for x in rows(f'PRAGMA table_info({table})')}
             for column,definition in columns:
@@ -173,6 +197,29 @@ def init_db():
         run('CREATE TABLE IF NOT EXISTS sola2_send_tokens (user_id BIGINT NOT NULL,chat_id BIGINT NOT NULL,token TEXT NOT NULL,message_id BIGINT NOT NULL,PRIMARY KEY(user_id,chat_id,token))')
         if not one('SELECT id FROM sola2_maintenance WHERE id=1'):
             run('INSERT INTO sola2_maintenance (id,message) VALUES (1,%s)',('',))
+        # v28: additive profile, achievements, moderation and support tables.
+        run(f"CREATE TABLE IF NOT EXISTS sola28_covers (user_id BIGINT PRIMARY KEY REFERENCES sola2_users(id), image_data {'BYTEA' if IS_PG else 'BLOB'} NOT NULL)")
+        run(f"CREATE TABLE IF NOT EXISTS sola28_badges (user_id BIGINT NOT NULL REFERENCES sola2_users(id), badge TEXT NOT NULL, awarded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, seen INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(user_id,badge))")
+        run("CREATE TABLE IF NOT EXISTS sola28_display_badges (user_id BIGINT NOT NULL REFERENCES sola2_users(id), badge TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(user_id,badge))")
+        run("CREATE TABLE IF NOT EXISTS sola31_solo_scores (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id BIGINT NOT NULL, game TEXT NOT NULL, score BIGINT NOT NULL, created_at BIGINT NOT NULL)" if not IS_PG else "CREATE TABLE IF NOT EXISTS sola31_solo_scores (id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, game TEXT NOT NULL, score BIGINT NOT NULL, created_at BIGINT NOT NULL)")
+        run("CREATE INDEX IF NOT EXISTS sola31_scores_period ON sola31_solo_scores(game,created_at)")
+        run("CREATE TABLE IF NOT EXISTS sola31_first_places (user_id BIGINT NOT NULL, game TEXT NOT NULL, achieved_at BIGINT NOT NULL, PRIMARY KEY(user_id,game))")
+        run(f"CREATE TABLE IF NOT EXISTS sola28_warnings (id {pk}, user_id BIGINT NOT NULL REFERENCES sola2_users(id), admin_id BIGINT NOT NULL REFERENCES sola2_users(id), reason TEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+        run(f"CREATE TABLE IF NOT EXISTS sola28_tickets (id {pk}, user_id BIGINT NOT NULL REFERENCES sola2_users(id), category TEXT NOT NULL, body TEXT NOT NULL, reply TEXT NOT NULL DEFAULT '', replied_by BIGINT REFERENCES sola2_users(id), created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, replied_at TIMESTAMP)")
+        run(f"CREATE TABLE IF NOT EXISTS sola28_admin_log (id {pk}, admin_id BIGINT NOT NULL REFERENCES sola2_users(id), action TEXT NOT NULL, target_id BIGINT, detail TEXT NOT NULL DEFAULT '', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+        # Restore official groups without deleting or resetting any existing data.
+        # Create the default group only when there is no official group at all.
+        official_ids = rows("SELECT id FROM sola2_chats WHERE kind='group' AND official=1")
+        if not official_ids:
+            code = new_group_code()
+            if IS_PG:
+                gid = run("INSERT INTO sola2_chats (kind,name,creator_id,official,group_code,description) VALUES ('group',%s,NULL,1,%s,%s) RETURNING id", ('SOLA CHAT 公式チャット',code,'全ユーザーが参加する公式グループ')).fetchone()['id']
+            else:
+                gid = run("INSERT INTO sola2_chats (kind,name,creator_id,official,group_code,description) VALUES ('group',%s,NULL,1,%s,%s)", ('SOLA CHAT 公式チャット',code,'全ユーザーが参加する公式グループ')).lastrowid
+            official_ids = [{'id': gid}]
+        # Add existing accounts to all official groups, idempotently.
+        for group in official_ids:
+            run("INSERT INTO sola2_members (chat_id,user_id) SELECT %s,u.id FROM sola2_users u WHERE u.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM sola2_members m WHERE m.chat_id=%s AND m.user_id=u.id) AND NOT EXISTS (SELECT 1 FROM sola2_group_bans b WHERE b.chat_id=%s AND b.user_id=u.id)", (group['id'],group['id'],group['id']))
         db().commit()
 
 
@@ -195,7 +242,7 @@ def new_public_code():
 def current_user():
     if not session.get('uid'):
         return None
-    return one('SELECT id,username,bio,hide_online,profile_scope,online_mode,public_code,suspended,suspension_reason FROM sola2_users WHERE id=%s', (session['uid'],))
+    return one('SELECT id,username,bio,hide_online,profile_scope,online_mode,public_code,suspended,suspension_reason,created_at FROM sola2_users WHERE id=%s AND deleted_at IS NULL', (session['uid'],))
 
 
 def login_required(fn):
@@ -206,6 +253,83 @@ def login_required(fn):
         if user.get('suspended'):return jsonify(error='アカウントが停止されています。理由：'+(user.get('suspension_reason') or '理由の記載なし')),403
         return fn(*args, **kwargs)
     return wrapped
+
+
+# v27: One owner, any number of deputies. Stored outside release folders.
+def sola_deputies():
+    return {str(x).strip().lower() for x in ADMIN_SETTINGS.get('deputies', []) if str(x).strip()}
+
+def sola_staff_authenticated():
+    user = current_user()
+    return bool(user and (sola_admin_authenticated() or (user['username'].lower() in sola_deputies() and bool((one('SELECT sola_id_hash FROM sola2_users WHERE id=%s',(user['id'],)) or {}).get('sola_id_hash')))))
+
+def sola_save_admin_settings():
+    import tempfile
+    data = dict(ADMIN_SETTINGS)
+    data['deputies'] = sorted(sola_deputies() - {data.get('username','').lower()})
+    fd, name = tempfile.mkstemp(prefix='.admin-', suffix='.tmp', dir=str(DATA_DIR))
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(name, 0o600)
+        os.replace(name, ADMIN_SETTINGS_PATH)
+    finally:
+        if os.path.exists(name): os.unlink(name)
+
+@app.get('/api/admin/roles')
+@login_required
+def sola_get_roles():
+    if not sola_staff_authenticated(): return error('管理者専用だよ', 403)
+    return jsonify(owner=ADMIN_SETTINGS.get('username',''), deputies=sorted(sola_deputies()),
+                   is_owner=sola_admin_authenticated())
+
+@app.post('/api/admin/roles/deputies')
+@login_required
+def sola_add_deputy():
+    if not sola_admin_authenticated(): return error('管理者だけが変更できるよ', 403)
+    data = payload()
+    target = one('SELECT username,deleted_at FROM sola2_users WHERE id=%s', (data.get('user_id'),))
+    if not target or target['deleted_at'] is not None: return error('ユーザーが見つからないよ', 404)
+    name = target['username'].lower()
+    if name in OFFICIAL_ADMINS: return error('管理者は副管理者にできないよ', 400)
+    ADMIN_SETTINGS['deputies'] = sorted(sola_deputies() | {name})
+    sola_save_admin_settings()
+    return jsonify(ok=True)
+
+@app.delete('/api/admin/roles/deputies/<int:user_id>')
+@login_required
+def sola_remove_deputy(user_id):
+    if not sola_admin_authenticated(): return error('管理者だけが変更できるよ', 403)
+    data = payload()
+    target = one('SELECT username FROM sola2_users WHERE id=%s', (user_id,))
+    if not target: return error('ユーザーが見つからないよ', 404)
+    ADMIN_SETTINGS['deputies'] = sorted(sola_deputies() - {target['username'].lower()})
+    sola_save_admin_settings()
+    return jsonify(ok=True)
+
+@app.post('/api/admin/roles/transfer')
+@login_required
+def sola_transfer_owner():
+    if not sola_admin_authenticated(): return error('管理者だけが譲渡できるよ', 403)
+    data = payload()
+    if data.get('confirmation') != 'TRANSFER':
+        return error('管理者パスワードとTRANSFERの確認が必要だよ', 403)
+    target = one('SELECT username,deleted_at FROM sola2_users WHERE id=%s', (data.get('user_id'),))
+    if not target or target['deleted_at'] is not None: return error('ユーザーが見つからないよ', 404)
+    name = target['username'].lower()
+    if name in OFFICIAL_ADMINS: return error('自分自身には譲渡できないよ', 400)
+    ADMIN_SETTINGS['deputies'] = sorted(sola_deputies() - {name})
+    ADMIN_SETTINGS['username'] = target['username']
+    sola_save_admin_settings()
+    OFFICIAL_ADMINS.clear()
+    OFFICIAL_ADMINS.add(name)
+    session['sola_admin'] = False
+    return jsonify(ok=True, new_owner=target['username'])
+
+
+
 
 
 @app.before_request
@@ -242,13 +366,13 @@ def notify(uid,kind,text,actor=None,chat_id=None):
 
 def can_manage_group(chat_id,uid):
     group=group_owner(chat_id)
-    return bool(group and (group['creator_id']==uid or one('SELECT 1 AS ok FROM sola2_coadmins WHERE chat_id=%s AND user_id=%s',(chat_id,uid))))
+    return bool(group and ((group['official'] and uid==session.get('uid') and sola_admin_authenticated()) or group['creator_id']==uid or one('SELECT 1 AS ok FROM sola2_coadmins WHERE chat_id=%s AND user_id=%s',(chat_id,uid))))
 
 
 def group_permission(chat_id,uid,permission):
     group=group_owner(chat_id)
     if not group:return False
-    if group['creator_id']==uid:return True
+    if group['creator_id']==uid or (group['official'] and uid==session.get('uid') and sola_admin_authenticated()):return True
     if not one('SELECT 1 AS ok FROM sola2_coadmins WHERE chat_id=%s AND user_id=%s',(chat_id,uid)):
         return False
     value=one('SELECT enabled FROM sola2_coadmin_permissions WHERE chat_id=%s AND user_id=%s AND permission=%s',(chat_id,uid,permission))
@@ -270,7 +394,7 @@ def public_status(user):
 
 
 def group_owner(chat_id):
-    return one("SELECT id,name,description,announcement,creator_id,official,group_code,created_at,max_members FROM sola2_chats WHERE id=%s AND kind='group'",(chat_id,))
+    return one("SELECT id,name,description,announcement,creator_id,official,group_code,created_at,max_members,join_mode FROM sola2_chats WHERE id=%s AND kind='group'",(chat_id,))
 
 
 def online_value(user):
@@ -286,6 +410,14 @@ def online_value(user):
         return -5 <= age < 40
     except (TypeError,ValueError):return False
 
+
+
+# SOLA GAME CENTER local integration
+@app.get('/games')
+def sola_games_page():
+    response = make_response(render_template('games.html'))
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
 
 @app.get('/')
 def home():
@@ -357,10 +489,132 @@ def sola_user_page(code):
 def me():
     session.setdefault('csrf', secrets.token_urlsafe(32))
     if current_user():run('UPDATE sola2_users SET last_seen=CURRENT_TIMESTAMP WHERE id=%s',(session['uid'],))
-    return jsonify(user=current_user(), csrf=session['csrf'], official_admin=bool(current_user() and sola_admin_authenticated()))
+    return jsonify(user=current_user(), csrf=session['csrf'], official_admin=bool(current_user() and sola_staff_authenticated()),setup_pending=bool(session.get('sola_setup_pending') or (current_user() and current_user()['username'].startswith('sola_user_'))))
 
 
-@app.post('/api/register')
+
+# v38: store the recovery ID encrypted at rest; only its owner may request it.
+from cryptography.fernet import Fernet, InvalidToken
+import base64
+
+def sola_id_cipher():
+    key = hashlib.sha256(('sola-id-encryption-v38|' + app.secret_key).encode('utf-8')).digest()
+    return Fernet(base64.urlsafe_b64encode(key))
+
+def encrypt_sola_id(code):
+    return sola_id_cipher().encrypt(code.encode('ascii')).decode('ascii')
+
+@app.get('/api/sola-id/mine')
+@login_required
+def sola_id_mine():
+    user = one('SELECT sola_id_hash,sola_id_encrypted FROM sola2_users WHERE id=%s', (session['uid'],))
+    if not user or not user['sola_id_hash']:
+        return jsonify(status='not_issued')
+    if not user['sola_id_encrypted']:
+        return jsonify(status='needs_recovery')
+    try:
+        code = sola_id_cipher().decrypt(user['sola_id_encrypted'].encode('ascii')).decode('ascii')
+    except (InvalidToken, ValueError):
+        return jsonify(status='needs_recovery')
+    if not hmac.compare_digest(sola_id_digest(code), user['sola_id_hash']):
+        return error('SOLA-IDの検証に失敗しました', 500)
+    response = jsonify(status='ok', sola_id=code)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+@app.post('/api/sola-id/save-existing')
+@login_required
+def sola_id_save_existing():
+    code = str(payload().get('sola_id','')).strip()
+    if not SOLA_ID_PATTERN.fullmatch(code):return error('SOLA-IDの形式を確認してね',400)
+    user = one('SELECT sola_id_hash,sola_id_encrypted FROM sola2_users WHERE id=%s',(session['uid'],))
+    if not user or not user['sola_id_hash'] or not hmac.compare_digest(sola_id_digest(code),user['sola_id_hash']):
+        return error('このアカウントのSOLA-IDではありません',403)
+    run('UPDATE sola2_users SET sola_id_encrypted=%s WHERE id=%s',(encrypt_sola_id(code),session['uid']))
+    return jsonify(ok=True)
+
+# v37: SOLA-ID is a bearer recovery secret; v38 permits owner-only viewing.
+
+SOLA_ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+SOLA_ID_PATTERN = re.compile(r'^sola-(?:[A-Za-z]{4}-){3}[A-Za-z]{4}$')
+
+def sola_id_digest(value):
+    return hmac.new(app.secret_key.encode('utf-8'), value.encode('ascii'), hashlib.sha256).hexdigest()
+
+def new_sola_id():
+    for _ in range(30):
+        code = 'sola-' + '-'.join(''.join(secrets.choice(SOLA_ID_ALPHABET) for _ in range(4)) for _ in range(4))
+        if not one('SELECT id FROM sola2_users WHERE sola_id_hash=%s', (sola_id_digest(code),)):
+            return code
+    raise RuntimeError('SOLA-IDを発行できませんでした')
+
+def sola_session_for(user_id):
+    session.clear()
+    session.permanent=True
+    session['uid']=user_id
+    session['csrf']=secrets.token_urlsafe(32)
+
+@app.post('/api/sola-id/create')
+def sola_id_create():
+    if current_user():return error('すでにアカウントがあります',409)
+    code=new_sola_id()
+    # Temporary unique username, finalized in setup modal.
+    name='sola_user_'+secrets.token_hex(9)
+    run('INSERT INTO sola2_users (username,password_hash,public_code,sola_id_hash,sola_id_encrypted) VALUES (%s,%s,%s,%s,%s)',(name,generate_password_hash(secrets.token_urlsafe(32)),new_public_code(),sola_id_digest(code),encrypt_sola_id(code)))
+    user=one('SELECT id FROM sola2_users WHERE username=%s',(name,))
+    for official in rows("SELECT id FROM sola2_chats WHERE kind='group' AND official=1"):
+        run('INSERT INTO sola2_members (chat_id,user_id) VALUES (%s,%s)',(official['id'],user['id']))
+    db().commit()
+    sola_session_for(user['id'])
+    session['sola_setup_pending']=True
+    return jsonify(sola_id=code,csrf=session['csrf']),201
+
+@app.post('/api/sola-id/restore')
+def sola_id_restore():
+    data=payload()
+    code=str(data.get('sola_id','')).strip()
+    if not SOLA_ID_PATTERN.fullmatch(code):return error('SOLA-IDの形式を確認してね',400)
+    # Rate limit by peer, without storing the raw ID or address.
+    key=hashlib.sha256(('sola-id|'+(request.remote_addr or 'unknown')).encode()).hexdigest()
+    now=int(time.time())
+    attempt=one('SELECT failures,first_at,blocked_until FROM sola2_login_attempts WHERE attempt_key=%s',(key,))
+    if attempt and attempt['blocked_until']>now:return error('試行回数が多すぎます。しばらく待ってね',429)
+    user=one('SELECT id FROM sola2_users WHERE sola_id_hash=%s AND deleted_at IS NULL',(sola_id_digest(code),))
+    if not user:
+        first=attempt['first_at'] if attempt and now-attempt['first_at']<900 else now
+        failures=(attempt['failures']+1 if attempt and first==attempt['first_at'] else 1)
+        blocked=now+900 if failures>=8 else 0
+        run('DELETE FROM sola2_login_attempts WHERE attempt_key=%s',(key,))
+        run('INSERT INTO sola2_login_attempts (attempt_key,failures,first_at,blocked_until) VALUES (%s,%s,%s,%s)',(key,failures,first,blocked))
+        return error('SOLA-IDが見つからないよ',401)
+    run('DELETE FROM sola2_login_attempts WHERE attempt_key=%s',(key,))
+    sola_session_for(user['id'])
+    session['sola_setup_pending']=bool(one('SELECT username FROM sola2_users WHERE id=%s',(user['id'],))['username'].startswith('sola_user_'))
+    return jsonify(user=current_user(),csrf=session['csrf'],official_admin=sola_staff_authenticated(),setup_pending=bool(session.get('sola_setup_pending')))
+
+@app.post('/api/sola-id/claim')
+@login_required
+def sola_id_claim():
+    # One-time migration for already authenticated legacy accounts.
+    if one('SELECT sola_id_hash FROM sola2_users WHERE id=%s',(session['uid'],))['sola_id_hash']:
+        return error('SOLA-IDはすでに発行されています',409)
+    code=new_sola_id()
+    run('UPDATE sola2_users SET sola_id_hash=%s,sola_id_encrypted=%s WHERE id=%s',(sola_id_digest(code),encrypt_sola_id(code),session['uid']))
+    return jsonify(sola_id=code)
+
+@app.post('/api/sola-id/setup')
+@login_required
+def sola_id_setup():
+    if not (session.get('sola_setup_pending') or current_user()['username'].startswith('sola_user_')):return error('初期設定は完了しています',403)
+    data=payload();name=str(data.get('username','')).strip()
+    if not re.fullmatch(r'[\w\-]{3,24}',name,re.UNICODE):return error('名前は3〜24文字にしてね',400)
+    if one('SELECT id FROM sola2_users WHERE lower(username)=lower(%s) AND id<>%s',(name,session['uid'])):
+        return error('そのユーザー名は使われているよ',409)
+    run('UPDATE sola2_users SET username=%s WHERE id=%s',(name,session['uid']))
+    session.pop('sola_setup_pending',None)
+    return jsonify(user=current_user(),csrf=session['csrf'],official_admin=sola_staff_authenticated())
+
+@app.post('/api/legacy/register-disabled')
 def register():
     data = payload()
     name = str(data.get('username','')).strip()
@@ -377,7 +631,13 @@ def register():
     except Exception:
         db().rollback()
         return error('登録できなかったよ。別の名前で試してね', 409)
+    # New users automatically join all official groups.
     user = one('SELECT id,username,bio,public_code FROM sola2_users WHERE username=%s', (name,))
+    for official in rows("SELECT id FROM sola2_chats WHERE kind='group' AND official=1"):
+        
+        if not one('SELECT 1 AS ok FROM sola2_group_bans WHERE chat_id=%s AND user_id=%s',(official['id'],user['id'])):
+            run('INSERT INTO sola2_members (chat_id,user_id) VALUES (%s,%s)', (official['id'],user['id']))
+    db().commit()
     session.clear()
     session.permanent = True
     session['uid'] = user['id']
@@ -392,7 +652,7 @@ def sola_login_key(username):
     text=(username.casefold()+'|'+peer).encode('utf-8')
     return hmac.new(app.secret_key.encode('utf-8'),text,hashlib.sha256).hexdigest()
 
-@app.post('/api/account/password')
+@app.post('/api/legacy/account-password-disabled')
 @login_required
 def sola_change_password():
     data=payload(); old=str(data.get('current_password',''));new=str(data.get('new_password',''))
@@ -410,14 +670,14 @@ def sola_login_history():
     data=rows('SELECT device,created_at FROM sola2_login_history WHERE user_id=%s ORDER BY id DESC LIMIT 20',(session['uid'],))
     return jsonify(history=data)
 
-@app.post('/api/login')
+@app.post('/api/legacy/login-disabled')
 def login():
     data=payload();username=str(data.get('username','')).strip();key=sola_login_key(username);now=int(time.time())
     attempt=one('SELECT failures,first_at,blocked_until FROM sola2_login_attempts WHERE attempt_key=%s',(key,))
     if attempt and int(attempt['blocked_until'])>now:
         return error('ログイン試行が多すぎるよ。15分ほど待ってから試してね',429)
     user=one('SELECT * FROM sola2_users WHERE lower(username)=lower(%s)',(username,))
-    if not user or not check_password_hash(user['password_hash'],str(data.get('password',''))):
+    if not user or user.get('deleted_at') is not None or not check_password_hash(user['password_hash'],str(data.get('password',''))):
         failures=(int(attempt['failures'])+1) if attempt and now-int(attempt['first_at'])<900 else 1
         first_at=int(attempt['first_at']) if attempt and now-int(attempt['first_at'])<900 else now
         until=now+900 if failures>=5 else 0
@@ -427,11 +687,11 @@ def login():
     wants_admin = data.get('admin_login') is True
 
     if wants_admin:
-        stored_hash = os.getenv('SOLA_ADMIN_PASSWORD_HASH', '').strip()
+        stored_hash = ADMIN_PASSWORD_HASH
         supplied = str(data.get('admin_password', ''))
 
         valid_admin = (
-            user['username'].lower() in OFFICIAL_ADMINS
+            (user['username'].lower() in OFFICIAL_ADMINS or user['username'].lower() in sola_deputies())
             and bool(stored_hash)
             and bool(supplied)
             and check_password_hash(stored_hash, supplied)
@@ -468,10 +728,10 @@ def login():
     if user.get('suspended'):
         return error('アカウントが停止されています。理由：'+(user.get('suspension_reason') or '理由の記載なし'),403)
     session.clear();session.permanent=True;session['uid']=user['id'];session['csrf']=secrets.token_urlsafe(32);session['sola_admin']=wants_admin
-    return jsonify(user=current_user(),csrf=session['csrf'],official_admin=sola_admin_authenticated())
+    return jsonify(user=current_user(),csrf=session['csrf'],official_admin=sola_staff_authenticated())
 
 
-@app.post('/api/logout')
+@app.post('/api/legacy/logout-disabled')
 def logout():
     session.clear()
     session['csrf'] = secrets.token_urlsafe(32)
@@ -506,7 +766,7 @@ def users():
 @app.get('/api/users/<int:user_id>')
 @login_required
 def user_profile(user_id):
-    user = one('SELECT id,username,bio,public_code,last_seen,hide_online,profile_scope,online_mode FROM sola2_users WHERE id=%s',(user_id,))
+    user = one('SELECT id,username,bio,public_code,last_seen,hide_online,profile_scope,online_mode,created_at FROM sola2_users WHERE id=%s',(user_id,))
     if not user:
         return error('ユーザーが見つからないよ',404)
     incoming = one("SELECT id FROM sola2_friend_requests WHERE from_id=%s AND to_id=%s AND status='pending'", (user_id,session['uid']))
@@ -519,6 +779,8 @@ def user_profile(user_id):
     alias=one('SELECT nickname FROM sola2_nicknames WHERE owner_id=%s AND target_id=%s',(session['uid'],user_id))
     user['nickname']=alias['nickname'] if alias else ''
     user.pop('last_seen',None)
+    user['badges']=sola28_user_badges(user_id)
+    user['display_badges']=sola28_display_badges(user_id)
     return jsonify(user=user,friend=friends(session['uid'],user_id),incoming=bool(incoming),outgoing=bool(outgoing),blocked=bool(one('SELECT blocker_id FROM sola2_blocks WHERE blocker_id=%s AND blocked_id=%s',(session['uid'],user_id))))
 
 
@@ -760,13 +1022,27 @@ def official_groups():
     return jsonify(groups=data)
 
 
+@app.get('/api/groups/open-directory')
+@login_required
+def open_group_directory():
+    """Publicly joinable non-official groups; no private/approval groups leaked."""
+    uid=session['uid']
+    data=rows("""SELECT c.id,c.name,c.description,c.join_mode,c.official,
+        (SELECT COUNT(*) FROM sola2_members m WHERE m.chat_id=c.id) AS member_count
+        FROM sola2_chats c
+        WHERE c.kind='group' AND c.official=0 AND c.join_mode='open'
+          AND NOT EXISTS (SELECT 1 FROM sola2_members mine WHERE mine.chat_id=c.id AND mine.user_id=%s)
+        ORDER BY c.id DESC LIMIT 100""",(uid,))
+    return jsonify(groups=data)
+
+
 @app.get('/api/groups/by-id/<int:chat_id>')
 @login_required
 def group_by_id(chat_id):
     """Look up one specific group ID, not a browsable directory."""
     if chat_id < 1:
         return error('正しいグループIDを入力してね')
-    group=one("""SELECT c.id,c.name,c.description,c.official,c.group_code,c.creator_id,c.created_at,c.max_members,u.username AS creator,
+    group=one("""SELECT c.id,c.name,c.description,c.official,c.group_code,c.creator_id,c.created_at,c.max_members,c.join_mode,u.username AS creator,
         (SELECT COUNT(*) FROM sola2_members m WHERE m.chat_id=c.id) AS members
         FROM sola2_chats c LEFT JOIN sola2_users u ON u.id=c.creator_id
         WHERE c.id=%s AND c.kind='group'""",(chat_id,))
@@ -783,7 +1059,7 @@ def group_by_code(code):
     code=code.upper().strip()
     if not re.fullmatch(r'[A-Z0-9]{8}',code):
         return error('グループIDは英数字8文字で入力してね')
-    group=one("""SELECT c.id,c.name,c.description,c.official,c.group_code,c.creator_id,c.created_at,c.max_members,u.username AS creator,
+    group=one("""SELECT c.id,c.name,c.description,c.official,c.group_code,c.creator_id,c.created_at,c.max_members,c.join_mode,u.username AS creator,
         (SELECT COUNT(*) FROM sola2_members m WHERE m.chat_id=c.id) AS members
         FROM sola2_chats c LEFT JOIN sola2_users u ON u.id=c.creator_id
         WHERE c.group_code=%s AND c.kind='group'""",(code,))
@@ -799,14 +1075,16 @@ def create_group():
     name=str(payload().get('name','')).strip()
     if not 2<=len(name)<=60:
         return error('グループ名は2〜60文字にしてね')
+    join_mode=payload().get('join_mode','approval')
+    if join_mode not in ('approval','open'):return error('参加方式が正しくないよ')
     official=1 if payload().get('official') and sola_admin_authenticated() else 0
     if payload().get('official') and not official:
         return error('公式グループは運営者だけが作れるよ',403)
     group_code=new_group_code()
     if IS_PG:
-        chat_id=run("INSERT INTO sola2_chats (kind,name,creator_id,official,group_code) VALUES ('group',%s,%s,%s,%s) RETURNING id",(name,session['uid'],official,group_code)).fetchone()['id']
+        chat_id=run("INSERT INTO sola2_chats (kind,name,creator_id,official,group_code,join_mode) VALUES ('group',%s,%s,%s,%s,%s) RETURNING id",(name,session['uid'],official,group_code,join_mode)).fetchone()['id']
     else:
-        chat_id=run("INSERT INTO sola2_chats (kind,name,creator_id,official,group_code) VALUES ('group',%s,%s,%s,%s)",(name,session['uid'],official,group_code)).lastrowid
+        chat_id=run("INSERT INTO sola2_chats (kind,name,creator_id,official,group_code,join_mode) VALUES ('group',%s,%s,%s,%s,%s)",(name,session['uid'],official,group_code,join_mode)).lastrowid
     run('INSERT INTO sola2_members (chat_id,user_id) VALUES (%s,%s)',(chat_id,session['uid']))
     return jsonify(id=chat_id,group_code=group_code),201
 
@@ -814,11 +1092,20 @@ def create_group():
 @app.post('/api/groups/<int:chat_id>/join')
 @login_required
 def join_group(chat_id):
-    chat=one("SELECT id FROM sola2_chats WHERE id=%s AND kind='group'",(chat_id,))
+    chat=one("SELECT id,join_mode,max_members FROM sola2_chats WHERE id=%s AND kind='group'",(chat_id,))
     if not chat:
         return error('グループが見つからないよ',404)
+    if one('SELECT 1 AS ok FROM sola2_group_bans WHERE chat_id=%s AND user_id=%s',(chat_id,session['uid'])):
+        return error('このグループへの参加は禁止されているよ',403)
     if membership(chat_id,session['uid']):
         return jsonify(ok=True)
+    if chat['join_mode']=='open':
+        member_count=one('SELECT COUNT(*) AS n FROM sola2_members WHERE chat_id=%s',(chat_id,))['n']
+        if member_count>=chat['max_members']:return error('このグループは満員だよ',409)
+        run('INSERT INTO sola2_members (chat_id,user_id) VALUES (%s,%s)',(chat_id,session['uid']))
+        run("UPDATE sola2_group_requests SET status='approved' WHERE chat_id=%s AND user_id=%s AND status='pending'",(chat_id,session['uid']))
+        activity(chat_id,'オープン制で参加した')
+        return jsonify(ok=True,pending=False)
     existing=one('SELECT id,status FROM sola2_group_requests WHERE chat_id=%s AND user_id=%s',(chat_id,session['uid']))
     if existing:
         if existing['status']=='pending':return jsonify(ok=True,pending=True)
@@ -834,9 +1121,11 @@ def join_group(chat_id):
 @app.post('/api/groups/<int:chat_id>/leave')
 @login_required
 def leave_group(chat_id):
-    group=one("SELECT id,creator_id FROM sola2_chats WHERE id=%s AND kind='group'",(chat_id,))
+    group=one("SELECT id,creator_id,official FROM sola2_chats WHERE id=%s AND kind='group'",(chat_id,))
     if not group or not membership(chat_id,session['uid']):
         return error('参加していないグループだよ',404)
+    if group['official']:
+        return error('公式グループは全ユーザーが参加するため退出できないよ',403)
     if group['creator_id']==session['uid']:
         return error('作成者はそのまま退出できないよ。まず管理者の引き継ぎが必要だよ',403)
     sola26_system_event(chat_id,session['uid'],'グループから退出しました')
@@ -852,8 +1141,8 @@ def leave_group(chat_id):
 def start_dm(user_id):
     uid=session['uid']
     if is_blocked(uid,user_id):return error('ブロック中の相手とはチャットできないよ',403)
-    if not friends(uid,user_id):
-        return error('フレンドになってからチャットを始められるよ',403)
+    if uid==user_id or not one('SELECT id FROM sola2_users WHERE id=%s',(user_id,)):
+        return error('相手が見つからないよ',404)
     found=one('''SELECT c.id FROM sola2_chats c JOIN sola2_members a ON a.chat_id=c.id AND a.user_id=%s JOIN sola2_members b ON b.chat_id=c.id AND b.user_id=%s WHERE c.kind='dm' LIMIT 1''',(uid,user_id))
     if found:
         return jsonify(id=found['id'])
@@ -890,6 +1179,23 @@ def insert_message(chat_id, uid, body, reply_id=None):
         return run('INSERT INTO sola2_messages (chat_id,user_id,body,reply_to) VALUES (%s,%s,%s,%s) RETURNING id',(chat_id,uid,body,reply_id)).fetchone()['id']
     return run('INSERT INTO sola2_messages (chat_id,user_id,body,reply_to) VALUES (%s,%s,%s,%s)',(chat_id,uid,body,reply_id)).lastrowid
 
+
+@app.get('/api/chats/<int:chat_id>/search')
+@login_required
+def search_chat_messages(chat_id):
+    if not membership(chat_id,session['uid']):
+        return error('このチャットには参加していないよ',403)
+    q=str(request.args.get('q','')).strip()
+    if len(q)<2:return jsonify(messages=[])
+    if len(q)>100:return error('検索文字は100文字以内にしてね')
+    # Escape LIKE wildcards so user input is always treated as literal text.
+    pattern='%'+q.replace('\\','\\\\').replace('%','\\%').replace('_','\\_')+'%'
+    found=rows('''SELECT m.id,m.body,m.created_at,u.username
+        FROM sola2_messages m JOIN sola2_users u ON u.id=m.user_id
+        WHERE m.chat_id=%s AND m.deleted_at IS NULL AND m.is_system=0
+        AND m.body ILIKE %s ESCAPE '\\'
+        ORDER BY m.id DESC LIMIT 50''',(chat_id,pattern))
+    return jsonify(messages=found)
 
 @app.get('/api/chats/<int:chat_id>/messages')
 @login_required
@@ -932,7 +1238,29 @@ def messages(chat_id):
     if chat['kind']=='group':
         info=group_owner(chat_id)
         chat['announcement']=info['announcement']
-    return jsonify(chat=chat,messages=data)
+    # DM only: expose the other participant's last acknowledged message ID.
+    # Never expose read state for unrelated chats or group participants.
+    peer_read_id = 0
+    if chat['kind'] == 'dm':
+        peer = one('''SELECT r.last_read_id FROM sola2_chat_reads r
+            JOIN sola2_members m ON m.chat_id=r.chat_id AND m.user_id=r.user_id
+            WHERE r.chat_id=%s AND r.user_id<>%s
+            ORDER BY r.last_read_id DESC LIMIT 1''',(chat_id,session['uid']))
+        if peer:
+            peer_read_id = int(peer['last_read_id'] or 0)
+    group_reads = {}
+    if chat['kind'] == 'group' and data:
+        # Only current members; the sender does not count as a reader.
+        current = rows('''SELECT m.user_id, COALESCE(r.last_read_id,0) AS last_read_id
+            FROM sola2_members m LEFT JOIN sola2_chat_reads r
+              ON r.chat_id=m.chat_id AND r.user_id=m.user_id
+            WHERE m.chat_id=%s''',(chat_id,))
+        for item in data:
+            if item['user_id'] == session['uid'] and not item['is_system']:
+                group_reads[str(item['id'])] = sum(
+                    1 for member in current if member['user_id'] != session['uid']
+                    and int(member['last_read_id'] or 0) >= int(item['id']))
+    return jsonify(chat=chat,messages=data,peer_read_id=peer_read_id,group_reads=group_reads)
 
 
 @app.post('/api/chats/<int:chat_id>/messages')
@@ -1034,7 +1362,9 @@ def edit_message(message_id):
 def retract_message(message_id):
     m=one('SELECT id,chat_id,user_id,deleted_at FROM sola2_messages WHERE id=%s',(message_id,))
     if not m or not membership(m['chat_id'],session['uid']):return error('メッセージが見つからないよ',404)
-    if m['user_id']!=session['uid']:return error('自分のメッセージだけ取り消せるよ',403)
+    chat=group_owner(m['chat_id'])
+    moderator=bool(chat and ((chat['official'] and sola_admin_authenticated()) or (not chat['official'] and chat['creator_id']==session['uid'])))
+    if m['user_id']!=session['uid'] and not moderator:return error('削除する権限がないよ',403)
     if not m['deleted_at']:
         run("UPDATE sola2_messages SET body='',deleted_at=CURRENT_TIMESTAMP WHERE id=%s",(message_id,))
         run('DELETE FROM sola2_message_images WHERE message_id=%s',(message_id,))
@@ -1058,6 +1388,25 @@ def toggle_reaction(message_id):
     else:
         run('INSERT INTO sola2_reactions (message_id,user_id,emoji) VALUES (%s,%s,%s)',(message_id,session['uid'],emoji))
     return jsonify(ok=True,active=not bool(old))
+
+
+@app.get('/api/chats/<int:chat_id>/messages/<int:message_id>/readers')
+@login_required
+def group_message_readers(chat_id, message_id):
+    if not membership(chat_id, session['uid']):
+        return error('参加していないチャットだよ',403)
+    chat=one('SELECT kind FROM sola2_chats WHERE id=%s',(chat_id,))
+    msg=one('SELECT user_id FROM sola2_messages WHERE id=%s AND chat_id=%s',(message_id,chat_id))
+    if not chat or chat['kind']!='group' or not msg:
+        return error('対象のメッセージが見つからないよ',404)
+    if msg['user_id']!=session['uid']:
+        return error('自分のメッセージのみ確認できるよ',403)
+    readers=rows('''SELECT u.id AS user_id,u.username FROM sola2_members m
+        JOIN sola2_users u ON u.id=m.user_id
+        JOIN sola2_chat_reads r ON r.chat_id=m.chat_id AND r.user_id=m.user_id
+        WHERE m.chat_id=%s AND m.user_id<>%s AND r.last_read_id >= %s
+        ORDER BY u.username''',(chat_id,session['uid'],message_id))
+    return jsonify(readers=readers,count=len(readers))
 
 
 @app.post('/api/chats/<int:chat_id>/read')
@@ -1095,6 +1444,35 @@ def toggle_pin(chat_id):
     return jsonify(ok=True,pinned=not bool(old))
 
 
+# v30: Irreversible group history purge. Only the actual group owner (or
+# authenticated supreme admin for official groups) may perform this action.
+@app.delete('/api/groups/<int:chat_id>/messages/all')
+@login_required
+def clear_all_group_messages(chat_id):
+    chat = group_owner(chat_id)
+    if not chat or not membership(chat_id, session['uid']):
+        return error('グループが見つからないよ', 404)
+    allowed = (chat['official'] and sola_admin_authenticated()) or (
+        not chat['official'] and chat['creator_id'] == session['uid'])
+    if not allowed:
+        return error('全メッセージ削除はグループ作成者だけが実行できるよ', 403)
+    data = payload()
+    if data.get('confirm') != 'DELETE_ALL_MESSAGES' or str(data.get('group_name', '')) != chat['name']:
+        return error('削除の確認が一致しないよ', 400)
+    count = one('SELECT COUNT(*) AS n FROM sola2_messages WHERE chat_id=%s', (chat_id,))['n']
+    # Clear references and attached payloads before deleting messages, within
+    # the request transaction. This removes even soft-deleted message stubs.
+    run('UPDATE sola2_reports SET message_id=NULL WHERE message_id IN (SELECT id FROM sola2_messages WHERE chat_id=%s)', (chat_id,))
+    run('UPDATE sola2_messages SET reply_to=NULL WHERE chat_id=%s', (chat_id,))
+    for table in ('sola2_reactions', 'sola2_message_images', 'sola2_files'):
+        run(f'DELETE FROM {table} WHERE message_id IN (SELECT id FROM sola2_messages WHERE chat_id=%s)', (chat_id,))
+    run('DELETE FROM sola2_send_tokens WHERE chat_id=%s', (chat_id,))
+    run('DELETE FROM sola2_messages WHERE chat_id=%s', (chat_id,))
+    run('UPDATE sola2_chat_reads SET last_read_id=0 WHERE chat_id=%s', (chat_id,))
+    run("DELETE FROM sola2_notifications WHERE chat_id=%s AND kind IN ('message','reaction','reply','mention')", (chat_id,))
+    return jsonify(ok=True, deleted=count)
+
+
 @app.get('/api/groups/<int:chat_id>/members')
 @login_required
 def group_members(chat_id):
@@ -1111,8 +1489,23 @@ def group_members(chat_id):
     for u in members:u['coadmin']=u['id'] in coadmins
     pending=rows("SELECT r.id,u.id AS user_id,u.username FROM sola2_group_requests r JOIN sola2_users u ON u.id=r.user_id WHERE r.chat_id=%s AND r.status='pending' ORDER BY r.id",(chat_id,)) if group_permission(chat_id,session['uid'],'requests') else []
     permissions={str(u['id']):{key:group_permission(chat_id,u['id'],key) for key in ('requests','members','announcement')} for u in members if u['coadmin']}
-    return jsonify(permissions=permissions,chat=chat,members=members,pending=pending,can_manage=can_manage_group(chat_id,session['uid']),is_owner=chat['creator_id']==session['uid'])
+    bans=rows('SELECT b.user_id,u.username,b.reason FROM sola2_group_bans b JOIN sola2_users u ON u.id=b.user_id WHERE b.chat_id=%s ORDER BY b.created_at DESC',(chat_id,)) if (chat['creator_id']==session['uid'] or (chat['official'] and sola_admin_authenticated())) else []
+    owner=chat['creator_id']==session['uid'] or bool(chat['official'] and sola_admin_authenticated())
+    return jsonify(permissions=permissions,chat=chat,members=members,pending=pending,bans=bans,can_manage=can_manage_group(chat_id,session['uid']),is_owner=owner)
 
+
+@app.patch('/api/groups/<int:chat_id>/join-mode')
+@login_required
+def change_group_join_mode(chat_id):
+    group=one("SELECT creator_id,official,join_mode FROM sola2_chats WHERE id=%s AND kind='group'",(chat_id,))
+    if not group:return error('グループが見つからないよ',404)
+    if group['creator_id']!=session['uid'] and not (group['official'] and sola_admin_authenticated()):
+        return error('参加方式を変更できるのはグループ管理者だけだよ',403)
+    mode=payload().get('join_mode')
+    if mode not in ('approval','open'):return error('参加方式が正しくないよ')
+    run('UPDATE sola2_chats SET join_mode=%s WHERE id=%s',(mode,chat_id))
+    activity(chat_id,'参加方式を'+('申請制' if mode=='approval' else 'オープン制')+'に変更した')
+    return jsonify(ok=True,join_mode=mode)
 
 @app.patch('/api/groups/<int:chat_id>')
 @login_required
@@ -1136,8 +1529,10 @@ def remove_group_member(chat_id,user_id):
     chat=one("SELECT creator_id FROM sola2_chats WHERE id=%s AND kind='group'",(chat_id,))
     if not chat or not group_permission(chat_id,session['uid'],'members'):
         return error('グループ管理者だけが変更できるよ',403)
+    if user_id==session['uid']:
+        return error('自分自身を退出させることはできないよ',403)
     if user_id==chat['creator_id']:
-        return error('作成者は削除できないよ')
+        return error('作成者は削除できないよ',403)
     sola26_system_event(chat_id,user_id,'グループから退出しました')
     run('DELETE FROM sola2_members WHERE chat_id=%s AND user_id=%s',(chat_id,user_id))
     run('DELETE FROM sola2_coadmins WHERE chat_id=%s AND user_id=%s',(chat_id,user_id))
@@ -1153,6 +1548,8 @@ def decide_group_request(chat_id,req_id,decision):
     if decision not in ('approve','reject'):return error('操作が正しくないよ')
     req=one("SELECT user_id FROM sola2_group_requests WHERE id=%s AND chat_id=%s AND status='pending'",(req_id,chat_id))
     if not req:return error('申請が見つからないよ',404)
+    if decision=='approve' and one('SELECT 1 AS ok FROM sola2_group_bans WHERE chat_id=%s AND user_id=%s',(chat_id,req['user_id'])):
+        return error('BAN中のユーザーは承認できないよ',403)
     if decision=='approve' and not membership(chat_id,req['user_id']):
         # Lock the group row on PostgreSQL to serialize concurrent approvals.
         # Capacity check must occur before membership insert.
@@ -1164,6 +1561,40 @@ def decide_group_request(chat_id,req_id,decision):
     run('UPDATE sola2_group_requests SET status=%s WHERE id=%s',('approved' if decision=='approve' else 'rejected',req_id))
     activity(chat_id,'参加申請を'+('承認' if decision=='approve' else '却下'))
     notify(req['user_id'],'group_decision','「'+group['name']+'」への参加申請が'+('承認' if decision=='approve' else '却下')+'されたよ',session['uid'],chat_id)
+    return jsonify(ok=True)
+
+
+@app.post('/api/groups/<int:chat_id>/bans/<int:user_id>')
+@login_required
+def ban_group_member(chat_id,user_id):
+    group=group_owner(chat_id)
+    if not group or not (group['creator_id']==session['uid'] or (group['official'] and sola_admin_authenticated())):
+        return error('BANする権限がないよ',403)
+    if user_id==session['uid'] or user_id==group['creator_id']:
+        return error('自分やグループ作成者はBANできないよ',403)
+    if not one('SELECT id FROM sola2_users WHERE id=%s',(user_id,)):
+        return error('ユーザーが見つからないよ',404)
+    reason=str(payload().get('reason','')).strip()[:200]
+    if not reason:return error('BAN理由を入力してね')
+    if one('SELECT 1 AS ok FROM sola2_group_bans WHERE chat_id=%s AND user_id=%s',(chat_id,user_id)):
+        return error('すでにBANされているよ',409)
+    run('INSERT INTO sola2_group_bans (chat_id,user_id,banned_by,reason) VALUES (%s,%s,%s,%s)',(chat_id,user_id,session['uid'],reason))
+    run('DELETE FROM sola2_members WHERE chat_id=%s AND user_id=%s',(chat_id,user_id))
+    run('DELETE FROM sola2_coadmins WHERE chat_id=%s AND user_id=%s',(chat_id,user_id))
+    run("DELETE FROM sola2_group_requests WHERE chat_id=%s AND user_id=%s",(chat_id,user_id))
+    activity(chat_id,'メンバーをBANした: '+reason[:90])
+    notify(user_id,'group_ban','「'+group['name']+'」からBANされたよ。理由: '+reason,session['uid'],chat_id)
+    return jsonify(ok=True)
+
+
+@app.delete('/api/groups/<int:chat_id>/bans/<int:user_id>')
+@login_required
+def unban_group_member(chat_id,user_id):
+    group=group_owner(chat_id)
+    if not group or not (group['creator_id']==session['uid'] or (group['official'] and sola_admin_authenticated())):
+        return error('BAN解除の権限がないよ',403)
+    run('DELETE FROM sola2_group_bans WHERE chat_id=%s AND user_id=%s',(chat_id,user_id))
+    activity(chat_id,'メンバーのBANを解除した')
     return jsonify(ok=True)
 
 
@@ -1183,9 +1614,63 @@ def transfer_group(chat_id):
     return jsonify(ok=True)
 
 
+# v47: retain notifications and official announcements for 30 days.
+def sola47_cleanup():
+    cutoff=(datetime.now(timezone.utc)-timedelta(days=30)).strftime('%Y-%m-%d %H:%M:%S')
+    run('DELETE FROM sola2_notifications WHERE created_at < %s',(cutoff,))
+    run('DELETE FROM sola47_announcements WHERE created_at < %s',(cutoff,))
+
+@app.get('/api/v47/announcements')
+@login_required
+def sola47_list_announcements():
+    sola47_cleanup()
+    items=rows("""SELECT a.id,a.title,a.body,a.importance,a.created_at,a.updated_at,
+        CASE WHEN r.user_id IS NULL THEN 0 ELSE 1 END AS is_read
+        FROM sola47_announcements a LEFT JOIN sola47_announcement_reads r
+        ON r.announcement_id=a.id AND r.user_id=%s
+        ORDER BY a.id DESC LIMIT 100""",(session['uid'],))
+    return jsonify(announcements=items,can_manage=sola_admin_authenticated())
+
+@app.post('/api/v47/announcements')
+@login_required
+def sola47_create_announcement():
+    if not sola_admin_authenticated():return error('管理者のみ投稿できるよ',403)
+    data=payload();title=str(data.get('title','')).strip();body=str(data.get('body','')).strip();importance=data.get('importance','normal')
+    if not 1<=len(title)<=100 or not 1<=len(body)<=3000:return error('タイトル1〜100文字、本文1〜3000文字で入力してね')
+    if importance not in ('normal','important','emergency'):return error('重要度が正しくないよ')
+    run('INSERT INTO sola47_announcements (title,body,importance,created_by) VALUES (%s,%s,%s,%s)',(title,body,importance,session['uid']))
+    return jsonify(ok=True)
+
+@app.put('/api/v47/announcements/<int:notice_id>')
+@login_required
+def sola47_edit_announcement(notice_id):
+    if not sola_admin_authenticated():return error('管理者のみ編集できるよ',403)
+    data=payload();title=str(data.get('title','')).strip();body=str(data.get('body','')).strip();importance=data.get('importance','normal')
+    if not 1<=len(title)<=100 or not 1<=len(body)<=3000:return error('タイトル1〜100文字、本文1〜3000文字で入力してね')
+    if importance not in ('normal','important','emergency'):return error('重要度が正しくないよ')
+    result=run('UPDATE sola47_announcements SET title=%s,body=%s,importance=%s,updated_at=CURRENT_TIMESTAMP WHERE id=%s',(title,body,importance,notice_id))
+    if not result.rowcount:return error('お知らせが見つからないよ',404)
+    return jsonify(ok=True)
+
+@app.delete('/api/v47/announcements/<int:notice_id>')
+@login_required
+def sola47_delete_announcement(notice_id):
+    if not sola_admin_authenticated():return error('管理者のみ削除できるよ',403)
+    run('DELETE FROM sola47_announcements WHERE id=%s',(notice_id,))
+    return jsonify(ok=True)
+
+@app.post('/api/v47/announcements/<int:notice_id>/read')
+@login_required
+def sola47_read_announcement(notice_id):
+    if not one('SELECT id FROM sola47_announcements WHERE id=%s',(notice_id,)):return error('お知らせが見つからないよ',404)
+    if IS_PG:run('INSERT INTO sola47_announcement_reads (announcement_id,user_id) VALUES (%s,%s) ON CONFLICT DO NOTHING',(notice_id,session['uid']))
+    else:run('INSERT OR IGNORE INTO sola47_announcement_reads (announcement_id,user_id) VALUES (%s,%s)',(notice_id,session['uid']))
+    return jsonify(ok=True)
+
 @app.get('/api/notifications')
 @login_required
 def notifications():
+    sola47_cleanup()
     items=rows('''SELECT n.id,n.kind,n.text,n.chat_id,n.actor_id,n.is_read,n.created_at,u.username AS actor_name
        FROM sola2_notifications n LEFT JOIN sola2_users u ON u.id=n.actor_id
        WHERE n.user_id=%s ORDER BY n.id DESC LIMIT 100''',(session['uid'],))
@@ -1210,6 +1695,7 @@ def read_one_notification(notification_id):
 @app.get('/api/notifications/summary')
 @login_required
 def notification_summary():
+    sola47_cleanup()
     count=one('SELECT COUNT(*) AS count FROM sola2_notifications WHERE user_id=%s AND is_read=0',(session['uid'],))['count']
     return jsonify(unread=count)
 
@@ -1247,16 +1733,52 @@ def report():
 
 
 
+# v25: Keep historical message foreign keys, anonymize the user record.
+# A deleted user cannot log in, re-register as the old ID, or rejoin official groups.
+def sola_delete_account(target_id):
+    user=one('SELECT id,username,deleted_at FROM sola2_users WHERE id=%s',(target_id,))
+    if not user or user.get('deleted_at') is not None:return False
+    alias='削除済みユーザー_'+str(target_id)
+    run("UPDATE sola2_users SET username=%s,password_hash=%s,bio='',public_code=NULL,hide_online=1,online_mode='invisible',deleted_at=CURRENT_TIMESTAMP WHERE id=%s",(alias,generate_password_hash(secrets.token_urlsafe(48)),target_id))
+    # Retain messages and references, but erase private account data.
+    for table, column in [('sola2_avatars','user_id'),('sola2_login_history','user_id'),('sola2_typing','user_id'),('sola2_chat_reads','user_id'),('sola2_chat_pins','user_id'),('sola2_members','user_id'),('sola2_group_requests','user_id'),('sola2_coadmins','user_id'),('sola2_coadmin_permissions','user_id'),('sola2_favorites','owner_id'),('sola2_favorites','friend_id'),('sola2_nicknames','owner_id'),('sola2_nicknames','target_id'),('sola2_blocks','blocker_id'),('sola2_blocks','blocked_id'),('sola2_friend_requests','from_id'),('sola2_friend_requests','to_id'),('sola2_reactions','user_id'),('sola2_send_tokens','user_id')]:
+        run(f'DELETE FROM {table} WHERE {column}=%s',(target_id,))
+    run('UPDATE sola2_chats SET creator_id=NULL WHERE creator_id=%s',(target_id,))
+    return True
+
+@app.post('/api/account/delete')
+@login_required
+def sola_self_delete():
+    data=payload(); user=one('SELECT password_hash FROM sola2_users WHERE id=%s',(session['uid'],))
+    if data.get('confirmation')!='DELETE':
+        return error('DELETE と入力してね',403)
+    if sola_admin_authenticated():return error('管理者アカウントは先に管理者設定を別のアカウントへ移してね',403)
+    sola_delete_account(session['uid']);session.clear()
+    return jsonify(ok=True)
+
+@app.post('/api/admin/users/<int:user_id>/delete')
+@login_required
+def sola_admin_delete_user(user_id):
+    if not sola_admin_authenticated():return error('管理者専用だよ',403)
+    data=payload()
+    if data.get('confirmation')!='DELETE':return error('DELETE の確認文字が必要だよ',403)
+    if user_id==session['uid']:return error('管理者自身の削除は設定画面で行ってね',403)
+    target=one('SELECT username,deleted_at FROM sola2_users WHERE id=%s',(user_id,))
+    if not target or target['deleted_at'] is not None:return error('ユーザーが見つからないよ',404)
+    if target['username'].lower() in OFFICIAL_ADMINS:return error('運営管理者アカウントは削除できないよ',403)
+    if not sola_delete_account(user_id):return error('削除できなかったよ',409)
+    return jsonify(ok=True)
+
 @app.get('/api/admin/overview')
 @login_required
 def admin_overview():
-    if not sola_admin_authenticated():
+    if not sola_staff_authenticated():
         return error('運営者専用だよ', 403)
 
     users = rows("""
         SELECT id, username, public_code, created_at,
                last_seen, hide_online, online_mode
-        FROM sola2_users ORDER BY username
+        FROM sola2_users WHERE deleted_at IS NULL ORDER BY username
     """)
 
     for u in users:
@@ -1288,13 +1810,29 @@ def admin_overview():
         )['n']
     }
 
+    if not sola_admin_authenticated():
+        groups=[]
     return jsonify(counts=counts, users=users, groups=groups)
+
+
+@app.post('/api/admin/groups/<int:chat_id>/enter')
+@login_required
+def admin_enter_group(chat_id):
+    if not sola_admin_authenticated():
+        return error('運営者専用だよ', 403)
+    chat=one("SELECT id,name FROM sola2_chats WHERE id=%s AND kind='group'",(chat_id,))
+    if not chat:return error('ルームが見つからないよ',404)
+    if not membership(chat_id,session['uid']):
+        run('INSERT INTO sola2_members (chat_id,user_id) VALUES (%s,%s)',(chat_id,session['uid']))
+        run('INSERT INTO sola2_group_activity (chat_id,actor_id,action) VALUES (%s,%s,%s)',
+            (chat_id,session['uid'],'official_admin_enter'))
+    return jsonify(ok=True,id=chat_id,name=chat['name'])
 
 
 @app.get('/api/admin/reports')
 @login_required
 def admin_reports():
-    if not sola_admin_authenticated():return error('運営者専用だよ',403)
+    if not sola_staff_authenticated():return error('運営者専用だよ',403)
     return jsonify(reports=rows('''SELECT r.id,r.reason,r.created_at,r.message_id,r.status, reporter.username AS reporter,
         target.username AS target FROM sola2_reports r JOIN sola2_users reporter ON reporter.id=r.reporter_id
         LEFT JOIN sola2_users target ON target.id=r.reported_id ORDER BY r.id DESC LIMIT 100'''))
@@ -1326,7 +1864,7 @@ def set_nickname(target_id):
 def add_coadmin(chat_id,user_id):
     group=group_owner(chat_id)
     if not group or group['creator_id']!=session['uid']:return error('作成者だけが任命できるよ',403)
-    if user_id==session['uid'] or not membership(chat_id,user_id):return error('参加中の別のメンバーを選んでね')
+    if user_id==session['uid'] or user_id==group['creator_id'] or not membership(chat_id,user_id):return error('作成者以外の別の参加メンバーを選んでね',403)
     if not one('SELECT 1 AS ok FROM sola2_coadmins WHERE chat_id=%s AND user_id=%s',(chat_id,user_id)):
         run('INSERT INTO sola2_coadmins (chat_id,user_id) VALUES (%s,%s)',(chat_id,user_id))
     activity(chat_id,'共同管理者を任命した')
@@ -1339,6 +1877,8 @@ def add_coadmin(chat_id,user_id):
 def remove_coadmin(chat_id,user_id):
     group=group_owner(chat_id)
     if not group or group['creator_id']!=session['uid']:return error('作成者だけが解除できるよ',403)
+    if user_id==session['uid'] or user_id==group['creator_id']:
+        return error('自分や作成者の権限はここから変更できないよ',403)
     run('DELETE FROM sola2_coadmins WHERE chat_id=%s AND user_id=%s',(chat_id,user_id))
     activity(chat_id,'共同管理者を解除した')
     return jsonify(ok=True)
@@ -1494,7 +2034,7 @@ def typing_ping(chat_id):
     chat=one('SELECT kind FROM sola2_chats WHERE id=%s',(chat_id,))
     if chat['kind']!='dm':return error('入力中表示は2人チャット限定だよ',403)
     other=one('SELECT user_id FROM sola2_members WHERE chat_id=%s AND user_id<>%s',(chat_id,session['uid']))
-    if not other or not friends(session['uid'],other['user_id']) or is_blocked(session['uid'],other['user_id']):return error('フレンドとのチャット限定だよ',403)
+    if not other or is_blocked(session['uid'],other['user_id']):return error('フレンドとのチャット限定だよ',403)
     # In-memory TTL; no message contents are stored. Each process sees its own sessions.
     import time
     run('INSERT INTO sola2_typing (chat_id,user_id,expires_at) VALUES (%s,%s,%s) ON CONFLICT(chat_id,user_id) DO UPDATE SET expires_at=excluded.expires_at',(chat_id,session['uid'],int(time.time())+5))
@@ -1508,7 +2048,7 @@ def typing_status(chat_id):
     chat=one('SELECT kind FROM sola2_chats WHERE id=%s',(chat_id,))
     if chat['kind']!='dm':return jsonify(typing=False)
     other=one('SELECT user_id FROM sola2_members WHERE chat_id=%s AND user_id<>%s',(chat_id,session['uid']))
-    if not other or not friends(session['uid'],other['user_id']) or is_blocked(session['uid'],other['user_id']):return jsonify(typing=False)
+    if not other or is_blocked(session['uid'],other['user_id']):return jsonify(typing=False)
     import time
     return jsonify(typing=bool(one('SELECT 1 AS ok FROM sola2_typing WHERE chat_id=%s AND user_id=%s AND expires_at>%s',(chat_id,other['user_id'],int(time.time())))))
 
@@ -1577,7 +2117,7 @@ def sola26_get_maintenance():
 @app.patch('/api/admin/reports/<int:report_id>/status')
 @login_required
 def sola26_report_status(report_id):
-    if not sola_admin_authenticated():
+    if not sola_staff_authenticated():
         return error('運営者専用だよ',403)
     status=payload().get('status')
     if status not in ('open','reviewing','resolved'):return error('ステータスが正しくないよ')
@@ -1627,6 +2167,522 @@ def sola26_system_event(chat_id,actor_id,action):
         run('INSERT INTO sola2_messages (chat_id,user_id,body,is_system) VALUES (%s,%s,%s,1)',(chat_id,actor_id,action))
 
 
-if __name__=='__main__':
+
+
+
+# v44: old friend data is preserved, but friend actions are no longer available.
+@app.before_request
+def sola44_retire_friends():
+    if request.path.startswith('/api/friends'):
+        return jsonify(error='フレンド機能は終了したよ'), 410
+
+
+# Game Center: local online matches, stored in the existing database.
+import json as game_json
+
+GAME_TYPES = {'ttt': 9, 'connect4': 42, 'reversi': 64}
+
+def game_tables():
+    run("""CREATE TABLE IF NOT EXISTS sola2_game_matches (
+        id TEXT PRIMARY KEY, game TEXT NOT NULL, host_id BIGINT NOT NULL,
+        guest_id BIGINT NOT NULL, status TEXT NOT NULL,
+        state TEXT NOT NULL, turn BIGINT NOT NULL, winner BIGINT,
+        updated_at BIGINT NOT NULL)""")
+    run('''CREATE TABLE IF NOT EXISTS sola44_game_presence (user_id BIGINT PRIMARY KEY,last_seen BIGINT NOT NULL)''')
+    run('''CREATE TABLE IF NOT EXISTS sola44_game_disconnect (match_id TEXT PRIMARY KEY,absent_user BIGINT NOT NULL,since_at BIGINT NOT NULL)''')
+
+def sola44_touch_presence(uid):
+    run('INSERT INTO sola44_game_presence(user_id,last_seen) VALUES (%s,%s) ON CONFLICT(user_id) DO UPDATE SET last_seen=excluded.last_seen',(uid,int(time.time())))
+
+def sola44_update_match(m,uid):
+    now=int(time.time())
+    if m['status']=='pending' and now-int(m['updated_at'])>=300:
+        run("UPDATE sola2_game_matches SET status='expired',updated_at=%s WHERE id=%s AND status='pending'",(now,m['id']))
+        return game_match(m['id'])
+    if m['status']!='playing':return m
+    opponent=m['guest_id'] if uid==m['host_id'] else m['host_id']
+    last=one('SELECT last_seen FROM sola44_game_presence WHERE user_id=%s',(opponent,))
+    # Give a player time to load the board before judging absence.
+    absent=not last or now-int(last['last_seen'])>15
+    old=one('SELECT absent_user,since_at FROM sola44_game_disconnect WHERE match_id=%s',(m['id'],))
+    if not absent:
+        if old:run('DELETE FROM sola44_game_disconnect WHERE match_id=%s',(m['id'],))
+        return m
+    if not old or old['absent_user']!=opponent:
+        run('INSERT INTO sola44_game_disconnect(match_id,absent_user,since_at) VALUES (%s,%s,%s) ON CONFLICT(match_id) DO UPDATE SET absent_user=excluded.absent_user,since_at=excluded.since_at',(m['id'],opponent,now))
+    elif now-int(old['since_at'])>=120:
+        run("UPDATE sola2_game_matches SET status='finished',winner=%s,updated_at=%s WHERE id=%s AND status='playing'",(uid,now,m['id']))
+        run('DELETE FROM sola44_game_disconnect WHERE match_id=%s',(m['id'],))
+        return game_match(m['id'])
+    return m
+
+def game_view(m, uid):
+    b=game_json.loads(m['state'])
+    host=one('SELECT username FROM sola2_users WHERE id=%s',(m['host_id'],))
+    guest=one('SELECT username FROM sola2_users WHERE id=%s',(m['guest_id'],))
+    disconnect=one('SELECT since_at FROM sola44_game_disconnect WHERE match_id=%s',(m['id'],)) if m['status']=='playing' else None
+    return dict(id=m['id'],game=m['game'],status='disconnected' if disconnect else m['status'],disconnect_remaining=max(0,120-(int(time.time())-int(disconnect['since_at']))) if disconnect else None,board=b,
+        host=host['username'] if host else '?',guest=guest['username'] if guest else '?',
+        me='host' if uid==m['host_id'] else 'guest',turn=m['turn'],winner=m['winner'],
+        updated=m['updated_at'])
+
+def game_match(mid):
+    return one('SELECT * FROM sola2_game_matches WHERE id=%s',(mid,))
+
+@app.get('/game-api/me')
+@login_required
+def game_me():
+    game_tables()
+    uid=session['uid']
+    matches=rows("SELECT * FROM sola2_game_matches WHERE (host_id=%s OR guest_id=%s) AND status IN ('pending','playing') ORDER BY updated_at DESC LIMIT 30",(uid,uid))
+    matches=[sola44_update_match(m,uid) for m in matches]
+    return jsonify(user=current_user()['username'],matches=[game_view(m,uid) for m in matches if m['status'] in ('pending','playing')])
+
+
+@app.post('/game-api/heartbeat')
+@login_required
+def sola44_game_heartbeat():
+    game_tables();sola44_touch_presence(session['uid']);return jsonify(ok=True)
+
+@app.get('/game-api/invitations')
+@login_required
+def sola44_invitation_history():
+    game_tables();uid=session['uid']
+    items=rows("SELECT * FROM sola2_game_matches WHERE guest_id=%s ORDER BY updated_at DESC LIMIT 40",(uid,))
+    items=[sola44_update_match(m,uid) for m in items]
+    return jsonify(invitations=[game_view(m,uid) for m in items])
+
+
+# v36: public matchmaking queue for the three turn-based games.
+def game_queue_table():
+    game_tables()
+    run("""CREATE TABLE IF NOT EXISTS sola2_game_queue (
+        user_id BIGINT PRIMARY KEY, game TEXT NOT NULL, created_at BIGINT NOT NULL
+    )""")
+
+def game_initial_board(game):
+    board=[0]*GAME_TYPES[game]
+    if game=='reversi':
+        board[27]=2;board[28]=1;board[35]=1;board[36]=2
+    return board
+
+@app.post('/game-api/queue/join')
+@login_required
+def game_queue_join():
+    game_queue_table()
+    data=payload(); game=str(data.get('game',''))
+    if game not in GAME_TYPES:return error('対応していないゲームだよ',400)
+    uid=session['uid'];now=int(time.time())
+    # One active public match per player/game. Refreshing does not create a duplicate.
+    active=one("SELECT * FROM sola2_game_matches WHERE (host_id=%s OR guest_id=%s) AND game=%s AND status='playing' ORDER BY updated_at DESC LIMIT 1",(uid,uid,game))
+    if active:return jsonify(status='matched',match=active['id'])
+    run('DELETE FROM sola2_game_queue WHERE user_id=%s OR created_at<%s',(uid,now-120))
+    candidates=rows('SELECT user_id FROM sola2_game_queue WHERE game=%s AND user_id<>%s ORDER BY created_at LIMIT 10',(game,uid))
+    for candidate in candidates:
+        other=candidate['user_id']
+        if is_blocked(uid,other):continue
+        claimed=run('DELETE FROM sola2_game_queue WHERE user_id=%s AND game=%s',(other,game))
+        if claimed.rowcount!=1:continue
+        mid=secrets.token_urlsafe(12)
+        run('INSERT INTO sola2_game_matches(id,game,host_id,guest_id,status,state,turn,winner,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)',(mid,game,other,uid,'playing',game_json.dumps(game_initial_board(game)),other,None,now))
+        return jsonify(status='matched',match=mid)
+    run('INSERT INTO sola2_game_queue(user_id,game,created_at) VALUES(%s,%s,%s)',(uid,game,now))
+    return jsonify(status='waiting')
+
+@app.get('/game-api/queue/status')
+@login_required
+def game_queue_status():
+    game_queue_table();uid=session['uid'];game=request.args.get('game','')
+    if game not in GAME_TYPES:return error('ゲームを選んでね',400)
+    match=one("SELECT * FROM sola2_game_matches WHERE (host_id=%s OR guest_id=%s) AND game=%s AND status='playing' ORDER BY updated_at DESC LIMIT 1",(uid,uid,game))
+    if match:return jsonify(status='matched',match=match['id'])
+    queued=one('SELECT * FROM sola2_game_queue WHERE user_id=%s AND game=%s',(uid,game))
+    if queued:
+        run('UPDATE sola2_game_queue SET created_at=%s WHERE user_id=%s',(int(time.time()),uid))
+    return jsonify(status='waiting' if queued else 'idle')
+
+@app.post('/game-api/queue/cancel')
+@login_required
+def game_queue_cancel():
+    game_queue_table();run('DELETE FROM sola2_game_queue WHERE user_id=%s',(session['uid'],))
+    return jsonify(ok=True)
+
+@app.post('/game-api/invite')
+@login_required
+def game_invite():
+    game_tables(); data=payload(); game=data.get('game'); target=str(data.get('target') or data.get('username') or '').strip()
+    if game not in GAME_TYPES:return error('このゲームはまだオンライン未対応だよ')
+    other=one('SELECT id FROM sola2_users WHERE username=%s',(target,))
+    if not other and target.isdecimal():other=one('SELECT id FROM sola2_users WHERE id=%s',(int(target),))
+    uid=session['uid']
+    if not other or other['id']==uid or is_blocked(uid,other['id']):return error('ユーザー名または通常IDを確認してね',403)
+    mid=secrets.token_urlsafe(12); board=[0]*GAME_TYPES[game]
+    if game=='reversi':board[27]=2;board[28]=1;board[35]=1;board[36]=2
+    run('INSERT INTO sola2_game_matches(id,game,host_id,guest_id,status,state,turn,winner,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)',(mid,game,uid,other['id'],'pending',game_json.dumps(board),uid,None,int(time.time())))
+    return jsonify(match=mid)
+
+@app.post('/game-api/respond')
+@login_required
+def game_respond():
+    game_tables(); data=payload(); m=game_match(str(data.get('id','')))
+    if m:m=sola44_update_match(m,session['uid'])
+    if not m or m['guest_id']!=session['uid'] or m['status']!='pending':return error('期限切れ、または参加できない招待だよ',403)
+    status='playing' if data.get('accept') is True else 'declined'
+    run('UPDATE sola2_game_matches SET status=%s,updated_at=%s WHERE id=%s AND status=%s',(status,int(time.time()),m['id'],'pending'))
+    return jsonify(ok=True)
+
+@app.get('/game-api/match/<mid>')
+@login_required
+def game_status(mid):
+    game_tables(); m=game_match(mid)
+    if not m or session['uid'] not in (m['host_id'],m['guest_id']):return error('対戦が見つからないよ',404)
+    sola44_touch_presence(session['uid'])
+    m=sola44_update_match(m,session['uid'])
+    return jsonify(match=game_view(m,session['uid']))
+
+def game_winner(b, game):
+    if game=='ttt':
+        lines=[[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]]
+        for x,y,z in lines:
+            if b[x] and b[x]==b[y]==b[z]:return b[x]
+    if game=='connect4':
+        for r in range(6):
+            for c in range(7):
+                v=b[r*7+c]
+                if not v:continue
+                for dr,dc in ((1,0),(0,1),(1,1),(1,-1)):
+                    if all(0<=r+dr*k<6 and 0<=c+dc*k<7 and b[(r+dr*k)*7+c+dc*k]==v for k in range(4)):return v
+    return 0
+
+def reversi_moves(b,player):
+    result={}; other=3-player
+    for i,v in enumerate(b):
+        if v:continue
+        r,c=divmod(i,8); flips=[]
+        for dr in (-1,0,1):
+            for dc in (-1,0,1):
+                if not(dr or dc):continue
+                rr,cc=r+dr,c+dc; found=[]
+                while 0<=rr<8 and 0<=cc<8 and b[rr*8+cc]==other:
+                    found.append(rr*8+cc);rr+=dr;cc+=dc
+                if found and 0<=rr<8 and 0<=cc<8 and b[rr*8+cc]==player:flips+=found
+        if flips:result[i]=flips
+    return result
+
+@app.post('/game-api/move')
+@login_required
+def game_move():
+    game_tables(); data=payload(); m=game_match(str(data.get('id','')));uid=session['uid']
+    if not m or uid not in (m['host_id'],m['guest_id']) or m['status']!='playing' or m['turn']!=uid:return error('今はあなたの番ではないよ',409)
+    b=game_json.loads(m['state']);game=m['game'];p=1 if uid==m['host_id'] else 2
+    try:i=int(data.get('cell'))
+    except (TypeError,ValueError):return error('マスを選んでね')
+    if not 0<=i<len(b):return error('範囲外のマスだよ')
+    if game=='connect4':
+        c=i%7; possible=[r*7+c for r in range(5,-1,-1) if b[r*7+c]==0]
+        if not possible:return error('その列には置けないよ')
+        i=possible[0]
+    if b[i]:return error('そのマスは埋まっているよ')
+    if game=='reversi':
+        flips=reversi_moves(b,p)
+        if i not in flips:return error('そこには置けないよ')
+        b[i]=p
+        for j in flips[i]:b[j]=p
+    else:b[i]=p
+    winner=game_winner(b,game);other=m['guest_id'] if uid==m['host_id'] else m['host_id'];turn=other
+    status='playing'
+    if game=='reversi':
+        if not reversi_moves(b,3-p):
+            if reversi_moves(b,p):turn=uid
+            else:
+                status='finished';a=b.count(1);z=b.count(2);winner=1 if a>z else 2 if z>a else 0
+    if winner or (0 not in b and game!='reversi'):status='finished'
+    # Only one pending turn update can succeed, preventing stale concurrent moves.
+    cur=run('UPDATE sola2_game_matches SET state=%s,turn=%s,winner=%s,status=%s,updated_at=%s WHERE id=%s AND status=%s AND turn=%s AND state=%s',(game_json.dumps(b),turn,(m['host_id'] if winner==1 else m['guest_id'] if winner==2 else None),status,int(time.time()),m['id'],'playing',uid,m['state']))
+    if cur.rowcount!=1:return error('対戦状態が更新されたよ。再読み込みしてね',409)
+    return jsonify(ok=True)
+
+@app.post('/game-api/forfeit')
+@login_required
+def game_forfeit():
+    game_tables();m=game_match(str(payload().get('id','')));uid=session['uid']
+    if not m or uid not in (m['host_id'],m['guest_id']) or m['status'] not in ('pending','playing'):return error('対戦が見つからないよ',404)
+    other=m['guest_id'] if uid==m['host_id'] else m['host_id']
+    run("UPDATE sola2_game_matches SET status='finished',winner=%s,updated_at=%s WHERE id=%s AND status IN ('pending','playing')",(other,int(time.time()),m['id']))
+    return jsonify(ok=True)
+
+
+# v29: persistent Game Center rankings. Only completed solo runs are submitted.
+SOLO_RANK_GAMES = ('snake', '2048', 'breakout')
+def sola29_rank_table():
+    run("""CREATE TABLE IF NOT EXISTS sola2_game_best (
+        user_id BIGINT NOT NULL, game TEXT NOT NULL, best_score BIGINT NOT NULL,
+        updated_at BIGINT NOT NULL, PRIMARY KEY (user_id, game))""")
+
+@app.post('/game-api/ranking/score')
+@login_required
+def sola29_rank_submit():
+    data = payload(); game = str(data.get('game', ''))
+    if game not in SOLO_RANK_GAMES: return error('対象外のゲームだよ', 400)
+    try: score = int(data.get('score', -1))
+    except (TypeError, ValueError): return error('スコアが不正だよ', 400)
+    if score < 0 or score > 100000000: return error('スコアが不正だよ', 400)
+    sola29_rank_table(); uid = session['uid']; now = int(time.time())
+    current = one('SELECT best_score FROM sola2_game_best WHERE user_id=%s AND game=%s', (uid, game))
+    if current:
+        if score > current['best_score']:
+            run('UPDATE sola2_game_best SET best_score=%s,updated_at=%s WHERE user_id=%s AND game=%s', (score, now, uid, game))
+    else:
+        run('INSERT INTO sola2_game_best(user_id,game,best_score,updated_at) VALUES(%s,%s,%s,%s)', (uid, game, score, now))
+    run('INSERT INTO sola31_solo_scores (user_id,game,score,created_at) VALUES (%s,%s,%s,%s)',(uid,game,score,now))
+    sola31_check_gamer_legend()
+    return jsonify(ok=True, personal_best=not current or score > current['best_score'])
+
+@app.get('/game-api/ranking')
+@login_required
+def sola29_ranking():
+    game=request.args.get('game','snake');period=request.args.get('period','all');scope=request.args.get('scope','all')
+    if game not in SOLO_RANK_GAMES + ('ttt','connect4','reversi'):return error('対象外のゲームだよ',400)
+    if period not in ('all','week','month') or scope!='all':return error('条件が不正だよ',400)
+    uid=session['uid'];sola29_rank_table()
+    friends={uid}
+    if scope=='friends':
+        for r in rows("SELECT from_id,to_id FROM sola2_friend_requests WHERE status='accepted' AND (from_id=%s OR to_id=%s)",(uid,uid)):
+            friends.add(r['to_id'] if r['from_id']==uid else r['from_id'])
+    cutoff=int(time.time())- (7*86400 if period=='week' else 30*86400)
+    if game in SOLO_RANK_GAMES:
+        if period=='all':
+            raw=rows('SELECT b.user_id,u.username,b.best_score AS score FROM sola2_game_best b JOIN sola2_users u ON u.id=b.user_id WHERE b.game=%s',(game,))
+        else:
+            raw=rows('SELECT s.user_id,u.username,MAX(s.score) AS score FROM sola31_solo_scores s JOIN sola2_users u ON u.id=s.user_id WHERE s.game=%s AND s.created_at>=%s GROUP BY s.user_id,u.username',(game,cutoff))
+    else:
+        game_tables()
+        if period=='all':
+            raw=rows("SELECT m.winner AS user_id,u.username,COUNT(*) AS score FROM sola2_game_matches m JOIN sola2_users u ON u.id=m.winner WHERE m.game=%s AND m.status='finished' AND m.winner IS NOT NULL GROUP BY m.winner,u.username",(game,))
+        else:
+            raw=rows("SELECT m.winner AS user_id,u.username,COUNT(*) AS score FROM sola2_game_matches m JOIN sola2_users u ON u.id=m.winner WHERE m.game=%s AND m.status='finished' AND m.winner IS NOT NULL AND m.updated_at>=%s GROUP BY m.winner,u.username",(game,cutoff))
+    ranked=sorted((r for r in raw if scope=='all' or r['user_id'] in friends),key=lambda r:(-int(r['score']),str(r['username']).lower()))
+    mine=next((r for r in ranked if r['user_id']==uid),None)
+    my_rank=1+sum(1 for r in ranked if int(r['score'])>int(mine['score'])) if mine else None
+    entries=[dict(username=r['username'],score=int(r['score']),me=r['user_id']==uid,rank=1+sum(1 for x in ranked if int(x['score'])>int(r['score']))) for r in ranked[:50]]
+    return jsonify(game=game,period=period,scope=scope,entries=entries,my_rank=my_rank,my_score=int(mine['score']) if mine else 0)
+
+@app.get('/game-api/identity')
+@login_required
+def game_identity():
+    return jsonify(id=session['uid'])
+
+
+
+
+# SOLA CHAT 2.0 v28
+SOLA28_BADGES = {
+ 'early':'初期メンバー','verified':'公式認定ユーザー','contributor':'コミュニティ貢献者',
+ 'ideas':'アイデア提供者','bug':'バグ発見者','chat100':'チャット好き',
+ 'chat1000':'おしゃべりマスター','year1':'1周年記念',
+ 'owner':'管理者','deputy':'副管理者','supporter':'SOLAサポーター',
+ 'event':'イベント参加者','winner':'イベント優勝者','creator':'クリエイター',
+ 'beta':'ベータテスター','legend':'SOLAレジェンド','first':'はじめの一歩',
+ 'chat5000':'会話の達人','halfyear':'半年記念','year2':'2周年記念','gamer_legend':'伝説のゲーマー'
+}
+SOLA28_MANUAL={'early','verified','contributor','ideas','bug','supporter','event','winner','creator','beta','legend'}
+
+# v31: fixed rarity and acquisition criteria. Rarity is cosmetic only.
+SOLA31_RARITIES = {
+ 'first':'コモン','chat100':'コモン','halfyear':'コモン',
+ 'chat1000':'レア','year1':'レア','bug':'レア','ideas':'レア','event':'レア',
+ 'chat5000':'エピック','year2':'エピック','beta':'エピック','creator':'エピック','supporter':'エピック',
+ 'early':'レジェンド','contributor':'レジェンド','verified':'レジェンド','winner':'レジェンド','deputy':'レジェンド',
+ 'legend':'ミシック','owner':'ミシック','gamer_legend':'ミシック'}
+SOLA31_METHODS = {
+ 'first':'初めてメッセージを送信','chat100':'累計100メッセージ','chat1000':'累計1,000メッセージ',
+ 'chat5000':'累計5,000メッセージ',
+ 'halfyear':'登録から半年','year1':'登録から1年','year2':'登録から2年',
+ 'early':'管理者から付与','verified':'管理者から公式認定','contributor':'コミュニティ貢献で管理者から認定',
+ 'ideas':'アイデア提供で管理者から認定','bug':'不具合報告で管理者から認定',
+ 'supporter':'運営協力で管理者から認定','event':'イベント参加で管理者から付与',
+ 'winner':'イベント優勝で管理者から付与','creator':'作品制作で管理者から認定',
+ 'beta':'新機能テストで管理者から認定','legend':'特別な功績で管理者から認定',
+ 'owner':'管理者になる','deputy':'副管理者に任命される',
+ 'gamer_legend':'スネーク・2048・ブロック崩しの全期間ランキングでそれぞれ1位を獲得'}
+
+def sola31_check_gamer_legend():
+    # Permanently remember a first-place achievement in each solo game.
+    sola29_rank_table()
+    uid=session['uid']
+    for game in SOLO_RANK_GAMES:
+        mine=one('SELECT best_score FROM sola2_game_best WHERE user_id=%s AND game=%s',(uid,game))
+        if not mine:continue
+        better=one('SELECT COUNT(*) AS n FROM sola2_game_best WHERE game=%s AND best_score>%s',(game,mine['best_score']))
+        if int(better['n'])==0 and not one('SELECT user_id FROM sola31_first_places WHERE user_id=%s AND game=%s',(uid,game)):
+            run('INSERT INTO sola31_first_places(user_id,game,achieved_at) VALUES (%s,%s,%s)',(uid,game,int(time.time())))
+    done=one('SELECT COUNT(*) AS n FROM sola31_first_places WHERE user_id=%s',(uid,))
+    if int(done['n'])>=3 and not one('SELECT badge FROM sola28_badges WHERE user_id=%s AND badge=%s',(uid,'gamer_legend')):
+        run('INSERT INTO sola28_badges (user_id,badge) VALUES (%s,%s)',(uid,'gamer_legend'))
+
+@app.get('/api/v31/badges')
+@login_required
+def sola31_badge_catalog():
+    uid=session['uid']; earned=set(sola28_user_badges(uid))
+    awarded={r['badge']:str(r['awarded_at']) for r in rows('SELECT badge,awarded_at FROM sola28_badges WHERE user_id=%s',(uid,))}
+    return jsonify(badges=[dict(id=k,name=v,rarity=SOLA31_RARITIES[k],method=SOLA31_METHODS[k],earned=k in earned,awarded_at=awarded.get(k)) for k,v in SOLA28_BADGES.items()],display=sola28_display_badges(uid))
+
+def sola28_user_badges(uid):
+    user=one('SELECT username,created_at FROM sola2_users WHERE id=%s',(uid,))
+    if not user:return []
+    from datetime import datetime, timezone
+    message_count=one('SELECT COUNT(*) AS n FROM sola2_messages WHERE user_id=%s',(uid,))['n']
+    # Friend-related achievements retired in v44; historical data is retained.
+    joined=user['created_at']
+    if isinstance(joined,str):
+        try:joined=datetime.fromisoformat(joined.replace('Z','+00:00'))
+        except ValueError:joined=datetime.now()
+    if joined.tzinfo:joined=joined.replace(tzinfo=None)
+    age=(datetime.utcnow()-joined).days
+    automatic={'first':message_count>=1,'chat100':message_count>=100,'chat1000':message_count>=1000,
+      'chat5000':message_count>=5000,
+      'halfyear':age>=183,'year1':age>=365,'year2':age>=730}
+    for badge,earned in automatic.items():
+        if earned and not one('SELECT badge FROM sola28_badges WHERE user_id=%s AND badge=%s',(uid,badge)):
+            run('INSERT INTO sola28_badges (user_id,badge) VALUES (%s,%s)',(uid,badge))
+    role='owner' if user['username'].lower() in OFFICIAL_ADMINS else ('deputy' if user['username'].lower() in sola_deputies() else None)
+    if role and not one('SELECT badge FROM sola28_badges WHERE user_id=%s AND badge=%s',(uid,role)):
+        run('INSERT INTO sola28_badges (user_id,badge) VALUES (%s,%s)',(uid,role))
+    for old in ({'owner','deputy'}-{role} if role else {'owner','deputy'}):
+        run('DELETE FROM sola28_badges WHERE user_id=%s AND badge=%s',(uid,old))
+        run('DELETE FROM sola28_display_badges WHERE user_id=%s AND badge=%s',(uid,old))
+    return [r['badge'] for r in rows('SELECT badge FROM sola28_badges WHERE user_id=%s ORDER BY awarded_at,badge',(uid,)) if r['badge'] in SOLA28_BADGES]
+
+def sola28_display_badges(uid):
+    earned=set(sola28_user_badges(uid))
+    return [r['badge'] for r in rows('SELECT badge FROM sola28_display_badges WHERE user_id=%s ORDER BY position',(uid,)) if r['badge'] in earned][:5]
+
+def sola28_log(action,target=None,detail=''):
+    run('INSERT INTO sola28_admin_log (admin_id,action,target_id,detail) VALUES (%s,%s,%s,%s)',(session['uid'],action,target,detail[:500]))
+
+@app.get('/api/v28/badges')
+@login_required
+def sola28_my_badges():
+    uid=session['uid'];earned=sola28_user_badges(uid)
+    return jsonify(catalog=SOLA28_BADGES,earned=earned,display=sola28_display_badges(uid))
+
+@app.post('/api/v28/badges/display')
+@login_required
+def sola28_set_display():
+    values=payload().get('badges',[])
+    if not isinstance(values,list) or len(values)>5 or len(values)!=len(set(map(str,values))):return error('バッジは最大5個だよ')
+    if any(v not in sola28_user_badges(session['uid']) for v in values):return error('未獲得のバッジは選べないよ')
+    run('DELETE FROM sola28_display_badges WHERE user_id=%s',(session['uid'],))
+    for i,badge in enumerate(values):run('INSERT INTO sola28_display_badges (user_id,badge,position) VALUES (%s,%s,%s)',(session['uid'],badge,i))
+    return jsonify(ok=True)
+
+@app.get('/api/v28/badges/unseen')
+@login_required
+def sola28_unseen():
+    sola28_user_badges(session['uid'])
+    return jsonify(badges=[r['badge'] for r in rows('SELECT badge FROM sola28_badges WHERE user_id=%s AND seen=0 ORDER BY awarded_at,badge',(session['uid'],)) if r['badge'] in SOLA28_BADGES])
+
+@app.post('/api/v28/badges/seen')
+@login_required
+def sola28_seen():
+    badge=payload().get('badge')
+    run('UPDATE sola28_badges SET seen=1 WHERE user_id=%s AND badge=%s',(session['uid'],badge))
+    return jsonify(ok=True)
+
+@app.post('/api/v28/badges/grant/<int:uid>')
+@login_required
+def sola28_grant(uid):
+    if not sola_admin_authenticated():return error('管理者専用',403)
+    badge=payload().get('badge');remove=payload().get('remove') is True
+    if badge not in SOLA28_MANUAL:return error('手動付与できないバッジだよ')
+    if not one('SELECT id FROM sola2_users WHERE id=%s AND deleted_at IS NULL',(uid,)):return error('ユーザーが見つからないよ',404)
+    if remove:
+        run('DELETE FROM sola28_badges WHERE user_id=%s AND badge=%s',(uid,badge))
+        run('DELETE FROM sola28_display_badges WHERE user_id=%s AND badge=%s',(uid,badge))
+    elif not one('SELECT badge FROM sola28_badges WHERE user_id=%s AND badge=%s',(uid,badge)):
+        run('INSERT INTO sola28_badges (user_id,badge) VALUES (%s,%s)',(uid,badge))
+    sola28_log('badge_remove' if remove else 'badge_grant',uid,badge)
+    return jsonify(ok=True)
+
+@app.get('/api/v28/covers/<int:uid>')
+@login_required
+def sola28_get_cover(uid):
+    item=one('SELECT image_data FROM sola28_covers WHERE user_id=%s',(uid,))
+    if not item:return error('背景画像なし',404)
+    return Response(bytes(item['image_data']),mimetype='image/jpeg',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
+
+@app.post('/api/v28/cover')
+@login_required
+def sola28_upload_cover():
+    file=request.files.get('cover')
+    if not file or not file.mimetype in ('image/jpeg','image/png','image/webp'):return error('JPEG・PNG・WebP画像を選んでね')
+    try:
+        with Image.open(file.stream) as im:
+            if im.width*im.height>20000000:return error('画像が大きすぎるよ')
+            im=ImageOps.exif_transpose(im).convert('RGB');im.thumbnail((1600,600))
+            output=BytesIO();im.save(output,format='JPEG',quality=83,optimize=True);data=output.getvalue()
+    except (UnidentifiedImageError,OSError,ValueError):return error('画像を読み取れないよ')
+    run('DELETE FROM sola28_covers WHERE user_id=%s',(session['uid'],))
+    run('INSERT INTO sola28_covers (user_id,image_data) VALUES (%s,%s)',(session['uid'],psycopg.Binary(data) if IS_PG else data))
+    return jsonify(ok=True)
+
+@app.delete('/api/v28/cover')
+@login_required
+def sola28_delete_cover():
+    run('DELETE FROM sola28_covers WHERE user_id=%s',(session['uid'],));return jsonify(ok=True)
+
+@app.post('/api/v28/warnings/<int:uid>')
+@login_required
+def sola28_warn(uid):
+    if not sola_staff_authenticated():return error('管理者専用',403)
+    reason=str(payload().get('reason','')).strip()
+    if not 2<=len(reason)<=500:return error('理由を2〜500文字で入力してね')
+    if not one('SELECT id FROM sola2_users WHERE id=%s AND deleted_at IS NULL',(uid,)):return error('ユーザーが見つからないよ',404)
+    run('INSERT INTO sola28_warnings (user_id,admin_id,reason) VALUES (%s,%s,%s)',(uid,session['uid'],reason))
+    run('INSERT INTO sola2_notifications (user_id,actor_id,kind,text) VALUES (%s,%s,%s,%s)',(uid,session['uid'],'warning','運営からの警告：'+reason))
+    sola28_log('warning',uid,reason)
+    return jsonify(ok=True)
+
+@app.get('/api/v28/warnings/me')
+@login_required
+def sola28_warnings_me():
+    return jsonify(warnings=rows('SELECT id,reason,created_at FROM sola28_warnings WHERE user_id=%s ORDER BY id DESC LIMIT 50',(session['uid'],)))
+
+@app.post('/api/v28/tickets')
+@login_required
+def sola28_create_ticket():
+    data=payload();category=str(data.get('category','other'));body=str(data.get('body','')).strip()
+    if category not in ('bug','feature','account','other') or not 5<=len(body)<=2000:return error('内容を5〜2000文字で入力してね')
+    run('INSERT INTO sola28_tickets (user_id,category,body) VALUES (%s,%s,%s)',(session['uid'],category,body))
+    return jsonify(ok=True)
+
+@app.get('/api/v28/tickets')
+@login_required
+def sola28_list_tickets():
+    if sola_staff_authenticated():
+        return jsonify(tickets=rows('SELECT t.*,u.username FROM sola28_tickets t JOIN sola2_users u ON u.id=t.user_id ORDER BY t.id DESC LIMIT 100'))
+    return jsonify(tickets=rows('SELECT id,category,body,reply,created_at,replied_at FROM sola28_tickets WHERE user_id=%s ORDER BY id DESC LIMIT 100',(session['uid'],)))
+
+@app.post('/api/v28/tickets/<int:tid>/reply')
+@login_required
+def sola28_reply_ticket(tid):
+    if not sola_staff_authenticated():return error('管理者専用',403)
+    reply=str(payload().get('reply','')).strip()
+    if not 1<=len(reply)<=2000:return error('返信を1〜2000文字で入力してね')
+    cur=run('UPDATE sola28_tickets SET reply=%s,replied_by=%s,replied_at=CURRENT_TIMESTAMP WHERE id=%s',(reply,session['uid'],tid))
+    if not cur.rowcount:return error('問い合わせが見つからないよ',404)
+    ticket=one('SELECT user_id FROM sola28_tickets WHERE id=%s',(tid,))
+    run('INSERT INTO sola2_notifications (user_id,actor_id,kind,text) VALUES (%s,%s,%s,%s)',(ticket['user_id'],session['uid'],'support_reply','運営から問い合わせへの返信が届いたよ'))
+    sola28_log('ticket_reply',tid)
+    return jsonify(ok=True)
+
+@app.get('/api/v28/admin/log')
+@login_required
+def sola28_logs():
+    if not sola_staff_authenticated():return error('管理者専用',403)
+    return jsonify(logs=rows('SELECT l.id,l.action,l.target_id,l.detail,l.created_at,u.username FROM sola28_admin_log l JOIN sola2_users u ON u.id=l.admin_id ORDER BY l.id DESC LIMIT 100'))
+
+
+if __name__=="__main__":
     init_db()
     app.run(host="0.0.0.0", port=5000, debug=False)
